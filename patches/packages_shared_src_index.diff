@@ -1,0 +1,84 @@
+*** Begin Patch
+*** Update File: packages/shared/src/index.ts
+@@
+ export interface AppAuditResponse {
+   appId: string;
+   appName: string;
+   successRate: number;
+   impactedUsers: number;
+   impactedDevices: number;
+   unresolvedRemainder: number;
+   verificationConfidence: number;
+   healthTrend: string;
+   topFailureReasons: string[];
+   clusters: Array<{
+     id: string;
+     appName: string;
+     normalizedCategory: string;
+     errorCode: string;
+     occurrences: number;
+     impactedTargets: number;
+     targetTypes: string[];
+     recommendedActions: string[];
+     latest: string;
++    signature?: string;
++    sampleTargets?: string[];
++    verificationState?: 'verified' | 'pending' | 'not-started';
++    operationalSeverity?: 'low' | 'medium' | 'high';
+   }>;
+-  smartPlaybooks: string[];
++  smartPlaybooks: Array<{
++    id: string;
++    title: string;
++    summary: string;
++    actionType: 'detect' | 'remediate' | 'verify';
++    confidence: number;
++    appliesToClusterIds: string[];
++  }>;
+   rolloutSafety: {
+     riskLevel: string;
+     pilotRecommendation: string;
+     rollbackNote: string;
+     affectedGroupsPreview: string[];
+   };
+   verification: {
+     improvedDeviceCount: number;
+     unresolvedRemainder: number;
+     confidenceScore: number;
++    state?: 'verified' | 'pending' | 'watch';
++    proofSummary?: string;
+   };
+   migration: {
+     isCandidate: boolean;
+     recommendation: string;
+     mappingStatus: string;
+   };
+   managementNarrative: string;
+ }
+ 
+ export interface DashboardImpactResponse {
+   impactSummary: string;
+   remediationQueue: Array<{ action: string; count: number }>;
+   appsNeedingAttention: Array<{ name: string; count: number; impacted: number }>;
+   valueProof: {
+     unresolvedRemainder?: number;
+     improvedCountEstimate?: number;
+     verificationConfidence?: number;
+   };
++  queuePreview?: Array<{
++    appId: string;
++    appName: string;
++    clusterLabel: string;
++    impactScore: number;
++    suggestedPlaybook: string;
++    verificationState: 'verified' | 'pending' | 'not-started';
++  }>;
++  proofSummary?: {
++    verifiedApps: number;
++    pendingVerificationApps: number;
++    proofNarrative: string;
++  };
+   smartSummary?: unknown;
+   insights?: unknown[];
+ }
+*** End Patch

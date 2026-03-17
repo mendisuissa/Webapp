@@ -1,0 +1,28 @@
+# Node modules
+node_modules/
+
+# Build outputs
+dist/
+build/
+out/
+
+# Env files
+.env
+.env.*
+apps/**/.env
+
+# Logs
+*.log
+apps/api/logs/
+
+# Prisma local dev DB
+apps/api/prisma/dev.db
+apps/api/prisma/dev.db-journal
+
+# Prisma generated files
+node_modules/.prisma/
+
+# OS / IDE
+.vscode/
+.idea/
+.DS_Store

@@ -1,0 +1,62 @@
+*** Begin Patch
+*** Update File: apps/api/src/routes/api.ts
+@@
++import { buildProofSummary, buildQueuePreview } from '../engines/remediationAuditPhase1.js';
+@@
+ apiRouter.get('/dashboard/impact', async (req: Request, res: Response) => {
+   try {
+     const data = await getViewData((req as any).session.accessToken);
+     const dashboard = buildDashboard(data);
++    const appRows = Array.isArray((data as any)?.apps) ? (data as any).apps : [];
++    const appAudits = appRows.slice(0, 12).map((row: any) => buildAppAudit(String(row.id ?? ''), data));
+     return res.json({
+       impactSummary: dashboard.managementNarrative,
+       remediationQueue: dashboard.remediationQueue ?? [],
+       appsNeedingAttention: dashboard.appsNeedingAttention ?? [],
+       valueProof: dashboard.valueProof ?? {},
++      queuePreview: buildQueuePreview(appAudits),
++      proofSummary: buildProofSummary(appAudits),
+       smartSummary: dashboard.smartSummary ?? null,
+       insights: dashboard.insights ?? []
+     });
+   } catch (error) {
+     return res.status(500).json({ message: error instanceof Error ? error.message : 'Failed to load dashboard impact.' });
+@@
+ apiRouter.get('/apps/:id/audit', async (req: Request, res: Response) => {
+   try {
+     const appId = String(req.params.id ?? '').trim();
+     if (!appId) return res.status(400).json({ message: 'App ID is required.' });
+     const data = await getViewData((req as any).session.accessToken);
+-    return res.json(buildAppAudit(appId, data));
++    const audit = buildAppAudit(appId, data);
++    const enriched = {
++      ...audit,
++      clusters: (audit.clusters ?? []).map((cluster: any) => ({
++        ...cluster,
++        signature: `${cluster.normalizedCategory}:${cluster.errorCode}`,
++        sampleTargets: (cluster.targetTypes ?? []).slice(0, 2),
++        verificationState: audit.verification?.confidenceScore >= 85 ? 'verified' : audit.verification?.confidenceScore >= 60 ? 'pending' : 'not-started',
++        operationalSeverity: cluster.impactedTargets >= 20 ? 'high' : cluster.impactedTargets >= 8 ? 'medium' : 'low'
++      })),
++      smartPlaybooks: (audit.smartPlaybooks ?? []).map((entry: any, index: number) => typeof entry === 'string' ? ({
++        id: `pb-${index + 1}`,
++        title: entry,
++        summary: entry,
++        actionType: index === 0 ? 'remediate' : index === 1 ? 'verify' : 'detect',
++        confidence: Math.max(55, Math.min(95, Number(audit.verificationConfidence ?? 70))),
++        appliesToClusterIds: (audit.clusters ?? []).slice(0, 2).map((cluster: any) => String(cluster.id))
++      }) : entry),
++      verification: {
++        ...audit.verification,
++        state: audit.verification?.confidenceScore >= 85 ? 'verified' : audit.verification?.confidenceScore >= 60 ? 'pending' : 'watch',
++        proofSummary: audit.verification?.confidenceScore >= 85
++          ? 'Remediation appears effective and verification evidence is strong.'
++          : 'Remediation trend exists, but proof is not strong enough yet.'
++      }
++    };
++    return res.json(enriched);
+   } catch (error) {
+     return res.status(500).json({ message: error instanceof Error ? error.message : 'Failed to load app audit.' });
+   }
+ });
+*** End Patch

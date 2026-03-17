@@ -1,0 +1,19 @@
+*** Begin Patch
+*** Update File: apps/web/src/App.tsx
+@@
++import { AppPhase1Panels, DashboardPhase1Panels } from './components/Phase1AuditPanels';
+@@
+ {currentView === 'dashboard' && dashboardImpact ? (
+   <>
+@@
++    <DashboardPhase1Panels impact={dashboardImpact} />
+   </>
+ ) : null}
+@@
+-{appAudit ? (
+-  <>
+-    existing audit cards...
+-  </>
+-) : null}
++{appAudit ? <AppPhase1Panels audit={appAudit} /> : null}
+*** End Patch
