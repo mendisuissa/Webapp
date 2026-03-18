@@ -1,5 +1,6 @@
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import fs from 'fs/promises';
+import { buildZip } from '../engines/win32Zip.js';
 import { DashboardData, SettingsData, ViewName } from '@efm/shared';
 import { config } from '../config.js';
 import { normalizeStatus } from '../engines/normalization.js';
@@ -13,7 +14,6 @@ import { logger } from '../utils/logger.js';
 import { toCsv } from '../utils/safe.js';
 import { PrismaIncidentRepository } from '../storage/incidentRepository.js';
 import { postIntuneAi } from './intuneAi.js';
-import { buildZip } from '../engines/win32Zip.js';
 
 const incidentRepo = new PrismaIncidentRepository();
 
@@ -1925,110 +1925,6 @@ apiRouter.get('/winget/migration-candidates', async (req: Request, res: Response
   }
 });
 
-
-apiRouter.post('/win32/package-bundle', (req: Request, res: Response) => {
-  try {
-    const name = String(req.body?.name ?? 'Win32 Package').trim() || 'Win32 Package';
-    const publisher = String(req.body?.publisher ?? '').trim();
-    const packageId = String(req.body?.packageId ?? '').trim();
-    const installCommand = String(req.body?.installCommand ?? '').trim();
-    const uninstallCommand = String(req.body?.uninstallCommand ?? '').trim();
-    const detectScript = String(req.body?.detectScript ?? '').trim();
-    const detectionType = String(req.body?.detectionType ?? 'Custom PowerShell').trim();
-    const detectionSummary = String(req.body?.detectionSummary ?? '').trim();
-    const source = String(req.body?.source ?? '').trim();
-    const confidence = String(req.body?.confidence ?? '').trim();
-    const notes = Array.isArray(req.body?.notes) ? req.body.notes.map((item: unknown) => String(item)) : [];
-
-    const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'win32-package';
-    const root = `${slug}/Intune-Package`;
-    const installScript = [
-      '$ErrorActionPreference = "Stop"',
-      '# Place your installer in the files folder before packaging.',
-      '# You can replace the command below if you decide to wrap the installer differently.',
-      installCommand || '# Add install command here'
-    ].join('\n');
-    const uninstallScript = [
-      '$ErrorActionPreference = "Stop"',
-      uninstallCommand || '# Add uninstall command here'
-    ].join('\n');
-    const intuneGuide = [
-      `App Name: ${name}`,
-      `Publisher: ${publisher || 'Needs validation'}`,
-      `Package ID: ${packageId || 'N/A'}`,
-      '',
-      'Program',
-      'Install command:',
-      'powershell.exe -ExecutionPolicy Bypass -File .\\install.ps1',
-      '',
-      'Uninstall command:',
-      'powershell.exe -ExecutionPolicy Bypass -File .\\uninstall.ps1',
-      '',
-      'Install behavior:',
-      'System',
-      '',
-      'Device restart behavior:',
-      'Determine behavior based on return codes',
-      '',
-      'Detection rule:',
-      'Use custom detection script and upload detect.ps1',
-      '',
-      'Command source:',
-      `${source || 'Unknown'} (${confidence || 'unrated'})`,
-      '',
-      'Notes:',
-      ...(notes.length ? notes.map((note: string) => `- ${note}`) : ['- Validate commands before production rollout.'])
-    ].join('\n');
-    const installText = `Install command
-
-${installCommand || 'No install command resolved.'}
-`;
-    const uninstallText = `Uninstall command
-
-${uninstallCommand || 'No uninstall command resolved.'}
-`;
-    const detectionText = [
-      `Detection type: ${detectionType}`,
-      '',
-      detectionSummary || 'Use the attached detect.ps1 script in Intune.',
-      '',
-      'Detection script file:',
-      'detect.ps1'
-    ].join('\n');
-    const readmeText = [
-      `${name} package folder`,
-      '',
-      'What to do:',
-      '1. Put the installer inside the files folder.',
-      '2. Review install.ps1 and uninstall.ps1.',
-      '3. Use detect.ps1 as a custom detection script in Intune.',
-      '4. Follow Intune-Import-Guide.txt when creating the Win32 app.',
-      '',
-      'Source:',
-      `${source || 'Unknown'} (${confidence || 'unrated'})`
-    ].join('\n');
-
-    const zip = buildZip([
-
-      { name: `${root}/install.ps1`, content: installScript },
-      { name: `${root}/uninstall.ps1`, content: uninstallScript },
-      { name: `${root}/detect.ps1`, content: detectScript || 'Write-Output "Detection script missing"\nexit 1' },
-      { name: `${root}/Intune-Import-Guide.txt`, content: intuneGuide },
-      { name: `${root}/Install-Command.txt`, content: installText },
-      { name: `${root}/Uninstall-Command.txt`, content: uninstallText },
-      { name: `${root}/Detection-Rule.txt`, content: detectionText },
-      { name: `${root}/README.txt`, content: readmeText },
-      { name: `${root}/files/put-installer-here.txt`, content: 'Place the installer package in this folder before running the Intune content prep tool.' }
-    ]);
-
-    res.setHeader('Content-Type', 'application/zip');
-    res.setHeader('Content-Disposition', `attachment; filename=${slug}-intune-package.zip`);
-    return res.send(zip);
-  } catch (error) {
-    return res.status(500).json({ message: error instanceof Error ? error.message : 'Failed to build package bundle.' });
-  }
-});
-
 apiRouter.get('/logs', async (_req: Request, res: Response) => {
   try {
     const raw = await fs.readFile(config.logFile, 'utf8');
@@ -2047,5 +1943,113 @@ apiRouter.get('/logs/download', async (_req: Request, res: Response) => {
     res.send(raw);
   } catch {
     res.status(404).send('No logs available.');
+  }
+});
+
+
+apiRouter.post('/win32/bundle', async (req: Request, res: Response) => {
+  try {
+    const {
+      appName,
+      publisher,
+      installCommand,
+      uninstallCommand,
+      detectScript,
+      source,
+      sourceUrl,
+      notes
+    } = req.body ?? {};
+
+    if (!appName || !installCommand) {
+      return res.status(400).json({ error: 'appName and installCommand are required' });
+    }
+
+    const safeName = String(appName)
+      .replace(/[^\w.-]+/g, '-')
+      .replace(/-+/g, '-')
+      .replace(/^-|-$/g, '')
+      .toLowerCase() || 'win32-package';
+
+    const root = `${safeName}/Intune-Package`;
+
+    const installScript = [
+      '$ErrorActionPreference = "Stop"',
+      String(installCommand)
+    ].join('\n');
+
+    const uninstallScript = [
+      '$ErrorActionPreference = "Stop"',
+      uninstallCommand ? String(uninstallCommand) : 'Write-Output "No uninstall command provided."'
+    ].join('\n');
+
+    const detectContent = detectScript
+      ? String(detectScript)
+      : [
+          'Write-Output "Detection script missing"',
+          'exit 1'
+        ].join('\n');
+
+    const normalizedNotes = Array.isArray(notes) && notes.length
+      ? notes.map((note: unknown) => String(note))
+      : ['Validate in a packaging VM before production rollout.'];
+
+    const intuneGuide = [
+      `App Name: ${appName}`,
+      `Publisher: ${publisher || 'Unknown'}`,
+      '',
+      'Install command:',
+      'powershell.exe -ExecutionPolicy Bypass -File .\\install.ps1',
+      '',
+      'Uninstall command:',
+      'powershell.exe -ExecutionPolicy Bypass -File .\\uninstall.ps1',
+      '',
+      'Detection:',
+      'Use custom detection script and upload .\\detect.ps1',
+      '',
+      `Source: ${source || 'Unknown'}`,
+      `Source URL: ${sourceUrl || 'N/A'}`,
+      '',
+      'Notes:',
+      ...normalizedNotes
+    ].join('\n');
+
+    const installText = `Install command\n\n${installCommand}\n`;
+    const uninstallText = `Uninstall command\n\n${uninstallCommand || 'Not provided'}\n`;
+    const detectionText = 'Detection rule\n\nUse custom detection script: .\\detect.ps1\n';
+
+    const readmeText = [
+      `${appName} package bundle`,
+      '',
+      'Files included:',
+      '- install.ps1',
+      '- uninstall.ps1',
+      '- detect.ps1',
+      '- Intune-Import-Guide.txt',
+      '- Install-Command.txt',
+      '- Uninstall-Command.txt',
+      '- Detection-Rule.txt',
+      '- README.txt',
+      '',
+      'Put the original installer in the files folder before packaging.'
+    ].join('\n');
+
+    const zip = buildZip([
+      { name: `${root}/install.ps1`, content: installScript },
+      { name: `${root}/uninstall.ps1`, content: uninstallScript },
+      { name: `${root}/detect.ps1`, content: detectContent },
+      { name: `${root}/Intune-Import-Guide.txt`, content: intuneGuide },
+      { name: `${root}/Install-Command.txt`, content: installText },
+      { name: `${root}/Uninstall-Command.txt`, content: uninstallText },
+      { name: `${root}/Detection-Rule.txt`, content: detectionText },
+      { name: `${root}/README.txt`, content: readmeText },
+      { name: `${root}/files/put-installer-here.txt`, content: 'Place the original installer file in this folder.' }
+    ]);
+
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="${safeName}-intune-package.zip"`);
+    return res.send(Buffer.from(zip));
+  } catch (error) {
+    logger.error({ err: error }, 'Failed to build win32 bundle');
+    return res.status(500).json({ error: 'Failed to build package bundle' });
   }
 });
