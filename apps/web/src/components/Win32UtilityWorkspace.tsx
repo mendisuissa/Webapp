@@ -1,36 +1,26 @@
-import { useMemo, useState } from 'react';
-import {
-  win32UtilitySeed,
-  type Win32AlternativeSource,
-  type Win32SourceKind,
-  type Win32UtilityRecord
-} from './win32UtilitySeed.js';
+import { useEffect, useMemo, useState } from 'react';
+import { searchWin32Packages, type Win32SearchResponse, type Win32SearchResultRecord } from '../api/client.js';
 
 type Props = {
   initialQuery?: string;
 };
 
-type SourceFilter = 'all' | Win32SourceKind;
-
-const sourceLabel: Record<Win32SourceKind, string> = {
-  winget: 'WinGet',
-  silentinstallhq: 'Silent Install HQ',
-  template: 'Template'
-};
+type SearchMode = 'quick' | 'deep';
 
 function copyToClipboard(value: string) {
   if (typeof navigator === 'undefined' || !navigator.clipboard) return;
   void navigator.clipboard.writeText(value);
 }
 
-function downloadPackageNotes(record: Win32UtilityRecord) {
+function downloadPackageNotes(record: Win32SearchResultRecord) {
   if (typeof window === 'undefined') return;
   const text = [
     `# ${record.name}`,
     `Publisher: ${record.publisher}`,
-    `Source: ${sourceLabel[record.source]}`,
+    `Source: ${record.sourceLabel}`,
+    `Source URL: ${record.sourceUrl}`,
     `Confidence: ${record.confidence}`,
-    `Last verified: ${record.lastVerified}`,
+    `Resolution type: ${record.resolutionType}`,
     '',
     '## Install command',
     record.installCommand,
@@ -47,8 +37,8 @@ function downloadPackageNotes(record: Win32UtilityRecord) {
     '## Notes',
     ...record.notes.map((item) => `- ${item}`),
     '',
-    '## Validation checklist',
-    ...record.validationChecklist.map((item) => `- ${item}`)
+    '## Evidence',
+    ...(record.evidence?.map((item) => `- ${item}`) ?? [])
   ].join('\n');
 
   const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
@@ -60,72 +50,69 @@ function downloadPackageNotes(record: Win32UtilityRecord) {
   URL.revokeObjectURL(url);
 }
 
-function SourceBadge({ source }: { source: Win32SourceKind }) {
-  return <span className={`win32-badge win32-badge-${source}`}>Source: {sourceLabel[source]}</span>;
+function SourceBadge({ value }: { value: string }) {
+  const safe = value.toLowerCase().includes('winget') ? 'winget' : 'silentinstallhq';
+  return <span className={`win32-badge win32-badge-${safe}`}>Source: {value}</span>;
 }
 
-function ConfidenceBadge({ confidence }: { confidence: Win32UtilityRecord['confidence'] }) {
-  return <span className={`win32-badge win32-confidence-${confidence}`}>Confidence: {confidence}</span>;
-}
-
-function AlternativeSourceRow({ item }: { item: Win32AlternativeSource }) {
-  return (
-    <div className="win32-alt-row">
-      <div>
-        <div className="win32-alt-title">{item.label}</div>
-        <div className="win32-alt-note">{item.note ?? 'Supplemental validation source.'}</div>
-      </div>
-      <div className="win32-alt-actions">
-        <span className={`win32-mini-badge win32-badge-${item.kind}`}>{sourceLabel[item.kind]}</span>
-        {item.url ? (
-          <a href={item.url} target="_blank" rel="noreferrer" className="win32-link-button">
-            Open
-          </a>
-        ) : null}
-      </div>
-    </div>
-  );
+function ConfidenceBadge({ value }: { value: 'high' | 'medium' }) {
+  return <span className={`win32-badge win32-confidence-${value}`}>Confidence: {value}</span>;
 }
 
 export default function Win32UtilityWorkspace({ initialQuery = '' }: Props) {
-  const [query, setQuery] = useState(initialQuery);
-  const [sourceFilter, setSourceFilter] = useState<SourceFilter>('all');
-  const [selectedId, setSelectedId] = useState<string>(win32UtilitySeed[0]?.id ?? '');
+  const [query, setQuery] = useState(initialQuery || 'Beyond Compare');
+  const [mode, setMode] = useState<SearchMode>('quick');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [result, setResult] = useState<Win32SearchResponse | null>(null);
+  const [selectedId, setSelectedId] = useState('');
 
-  const filtered = useMemo(() => {
-    const needle = query.trim().toLowerCase();
-    return win32UtilitySeed.filter((record) => {
-      const sourceMatch = sourceFilter === 'all' || record.source === sourceFilter;
-      const searchMatch =
-        !needle ||
-        record.name.toLowerCase().includes(needle) ||
-        record.publisher.toLowerCase().includes(needle) ||
-        record.packageId?.toLowerCase().includes(needle);
-      return sourceMatch && searchMatch;
-    });
-  }, [query, sourceFilter]);
+  async function runSearch(activeQuery = query, activeMode = mode) {
+    const trimmed = activeQuery.trim();
+    if (!trimmed) return;
+    setLoading(true);
+    setError('');
+    try {
+      const response = await searchWin32Packages(trimmed, activeMode);
+      setResult(response);
+      setSelectedId(response.bestMatch?.id ?? response.alternatives[0]?.id ?? '');
+    } catch (searchError) {
+      setError(searchError instanceof Error ? searchError.message : 'Search failed.');
+    } finally {
+      setLoading(false);
+    }
+  }
 
-  const selected = useMemo(() => {
-    const directMatch = filtered.find((item) => item.id === selectedId);
-    return directMatch ?? filtered[0] ?? win32UtilitySeed[0] ?? null;
-  }, [filtered, selectedId]);
+  useEffect(() => {
+    void runSearch(query, mode);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const records = useMemo(() => {
+    const items: Win32SearchResultRecord[] = [];
+    if (result?.bestMatch) items.push(result.bestMatch);
+    items.push(...(result?.alternatives ?? []));
+    return items;
+  }, [result]);
+
+  const selected = useMemo(() => records.find((item) => item.id === selectedId) ?? records[0] ?? null, [records, selectedId]);
 
   return (
     <section className="win32-workspace-shell">
       <div className="win32-hero-card">
         <div>
-          <div className="win32-kicker">New workspace</div>
+          <div className="win32-kicker">Live source resolution</div>
           <h2 className="win32-title">Win32 Packaging Assistant</h2>
           <p className="win32-subtitle">
-            Find silent install, uninstall, and detection logic for packaging apps into Intune.
+            Search WinGet first, then trusted external sources. If no reliable source exists, the app says so instead of inventing commands.
           </p>
         </div>
         <div className="win32-hero-actions">
-          <button className="win32-primary-button" type="button" onClick={() => selected && downloadPackageNotes(selected)}>
-            Export package notes
+          <button className="win32-primary-button" type="button" disabled={loading} onClick={() => void runSearch()}>
+            {loading ? 'Resolving…' : mode === 'deep' ? 'Run deep search' : 'Resolve package'}
           </button>
-          <button className="win32-secondary-button" type="button" onClick={() => selected && copyToClipboard(selected.detectionScript)}>
-            Copy detect script
+          <button className="win32-secondary-button" type="button" disabled={!selected} onClick={() => selected && downloadPackageNotes(selected)}>
+            Export package notes
           </button>
         </div>
       </div>
@@ -136,22 +123,20 @@ export default function Win32UtilityWorkspace({ initialQuery = '' }: Props) {
           <input
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="Chrome, VS Code, Zoom, Notepad++"
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') void runSearch();
+            }}
+            placeholder="Beyond Compare, Notepad++, TreeSize"
             className="win32-search-input"
           />
         </label>
 
         <div className="win32-filter-group">
-          <span className="win32-search-label">Source filter</span>
+          <span className="win32-search-label">Search mode</span>
           <div className="win32-pill-row">
-            {(['all', 'winget', 'silentinstallhq', 'template'] as const).map((filter) => (
-              <button
-                key={filter}
-                type="button"
-                className={`win32-filter-pill ${sourceFilter === filter ? 'is-active' : ''}`}
-                onClick={() => setSourceFilter(filter)}
-              >
-                {filter === 'all' ? 'All sources' : sourceLabel[filter]}
+            {(['quick', 'deep'] as const).map((item) => (
+              <button key={item} type="button" className={`win32-filter-pill ${mode === item ? 'is-active' : ''}`} onClick={() => setMode(item)}>
+                {item === 'quick' ? 'Quick search' : 'Deep search'}
               </button>
             ))}
           </div>
@@ -162,36 +147,30 @@ export default function Win32UtilityWorkspace({ initialQuery = '' }: Props) {
         <aside className="win32-results-panel">
           <div className="win32-panel-title-row">
             <h3 className="win32-panel-title">Matches</h3>
-            <span className="win32-count-pill">{filtered.length}</span>
+            <span className="win32-count-pill">{records.length}</span>
           </div>
-
+          <div className="win32-empty-state" style={{ marginBottom: '12px' }}>
+            {result?.message ?? 'Search WinGet and external sources from one place.'}
+            {result?.sourcesChecked?.length ? ` Sources checked: ${result.sourcesChecked.join(', ')}.` : ''}
+          </div>
+          {error ? <div className="win32-empty-state">{error}</div> : null}
           <div className="win32-results-list">
-            {filtered.map((record) => (
-              <button
-                key={record.id}
-                type="button"
-                className={`win32-result-card ${selected?.id === record.id ? 'is-selected' : ''}`}
-                onClick={() => setSelectedId(record.id)}
-              >
+            {records.map((record, index) => (
+              <button key={record.id} type="button" className={`win32-result-card ${selected?.id === record.id ? 'is-selected' : ''}`} onClick={() => setSelectedId(record.id)}>
                 <div className="win32-result-header">
                   <div>
-                    <div className="win32-result-name">{record.name}</div>
+                    <div className="win32-result-name">{index === 0 && result?.bestMatch?.id === record.id ? 'Best match • ' : ''}{record.name}</div>
                     <div className="win32-result-publisher">{record.publisher}</div>
                   </div>
-                  <ConfidenceBadge confidence={record.confidence} />
+                  <ConfidenceBadge value={record.confidence} />
                 </div>
                 <div className="win32-result-meta">
-                  <SourceBadge source={record.source} />
-                  <span className="win32-result-date">Verified {record.lastVerified}</span>
+                  <SourceBadge value={record.sourceLabel} />
+                  <span className="win32-result-date">{record.packageId ?? record.sourceTitle}</span>
                 </div>
               </button>
             ))}
-
-            {filtered.length === 0 ? (
-              <div className="win32-empty-state">
-                No packages matched this search. Use template mode for private or unknown apps.
-              </div>
-            ) : null}
+            {!loading && records.length === 0 ? <div className="win32-empty-state">No reliable source-backed command set was found for this query.</div> : null}
           </div>
         </aside>
 
@@ -202,16 +181,12 @@ export default function Win32UtilityWorkspace({ initialQuery = '' }: Props) {
                 <div className="win32-summary-header">
                   <div>
                     <div className="win32-summary-title">{selected.name}</div>
-                    <div className="win32-summary-meta">
-                      {selected.publisher}
-                      {selected.version ? ` • ${selected.version}` : ''}
-                      {selected.packageId ? ` • ${selected.packageId}` : ''}
-                    </div>
+                    <div className="win32-summary-meta">{selected.publisher}{selected.packageId ? ` • ${selected.packageId}` : ''}</div>
                   </div>
                   <div className="win32-summary-badges">
-                    <SourceBadge source={selected.source} />
-                    <ConfidenceBadge confidence={selected.confidence} />
-                    <span className="win32-badge win32-badge-muted">Verified {selected.lastVerified}</span>
+                    <SourceBadge value={selected.sourceLabel} />
+                    <ConfidenceBadge value={selected.confidence} />
+                    <a href={selected.sourceUrl} target="_blank" rel="noreferrer" className="win32-link-button">Open source</a>
                   </div>
                 </div>
                 <div className="win32-summary-note">{selected.detectionSummary}</div>
@@ -221,9 +196,7 @@ export default function Win32UtilityWorkspace({ initialQuery = '' }: Props) {
                 <article className="win32-command-card">
                   <div className="win32-command-header">
                     <h3>Install command</h3>
-                    <button type="button" className="win32-copy-button" onClick={() => copyToClipboard(selected.installCommand)}>
-                      Copy
-                    </button>
+                    <button type="button" className="win32-copy-button" onClick={() => copyToClipboard(selected.installCommand)}>Copy</button>
                   </div>
                   <pre className="win32-code-block">{selected.installCommand}</pre>
                 </article>
@@ -231,9 +204,7 @@ export default function Win32UtilityWorkspace({ initialQuery = '' }: Props) {
                 <article className="win32-command-card">
                   <div className="win32-command-header">
                     <h3>Uninstall command</h3>
-                    <button type="button" className="win32-copy-button" onClick={() => copyToClipboard(selected.uninstallCommand)}>
-                      Copy
-                    </button>
+                    <button type="button" className="win32-copy-button" onClick={() => copyToClipboard(selected.uninstallCommand)}>Copy</button>
                   </div>
                   <pre className="win32-code-block">{selected.uninstallCommand}</pre>
                 </article>
@@ -242,12 +213,10 @@ export default function Win32UtilityWorkspace({ initialQuery = '' }: Props) {
               <article className="win32-detection-card">
                 <div className="win32-command-header">
                   <div>
-                    <h3>Detection method</h3>
-                    <div className="win32-detection-subtitle">Recommended {selected.detectionKind} detection for Intune packaging.</div>
+                    <h3>Detection script</h3>
+                    <div className="win32-detection-subtitle">Generated from source clues, not from a fake install template.</div>
                   </div>
-                  <button type="button" className="win32-copy-button" onClick={() => copyToClipboard(selected.detectionScript)}>
-                    Copy script
-                  </button>
+                  <button type="button" className="win32-copy-button" onClick={() => copyToClipboard(selected.detectionScript)}>Copy</button>
                 </div>
                 <pre className="win32-code-block win32-script-block">{selected.detectionScript}</pre>
               </article>
@@ -255,42 +224,23 @@ export default function Win32UtilityWorkspace({ initialQuery = '' }: Props) {
               <div className="win32-lower-grid">
                 <article className="win32-list-card">
                   <h3>Notes</h3>
-                  <ul>
-                    {selected.notes.map((note) => (
-                      <li key={note}>{note}</li>
-                    ))}
-                  </ul>
+                  <div className="win32-list-stack">
+                    {selected.notes.map((note) => <div key={note} className="win32-list-item">{note}</div>)}
+                  </div>
                 </article>
-
                 <article className="win32-list-card">
-                  <h3>Validation checklist</h3>
-                  <ul>
-                    {selected.validationChecklist.map((item) => (
-                      <li key={item}>{item}</li>
+                  <h3>Evidence</h3>
+                  <div className="win32-list-stack">
+                    {(selected.evidence?.length ? selected.evidence : ['No explicit evidence lines were captured.']).map((item) => (
+                      <div key={item} className="win32-list-item">{item}</div>
                     ))}
-                  </ul>
+                  </div>
                 </article>
               </div>
-
-              {selected.alternatives?.length ? (
-                <article className="win32-alt-card">
-                  <div className="win32-command-header">
-                    <h3>Alternative sources</h3>
-                    {selected.sourceUrl ? (
-                      <a href={selected.sourceUrl} target="_blank" rel="noreferrer" className="win32-link-button">
-                        Open primary source
-                      </a>
-                    ) : null}
-                  </div>
-                  <div className="win32-alt-list">
-                    {selected.alternatives.map((item) => (
-                      <AlternativeSourceRow key={`${selected.id}-${item.label}`} item={item} />
-                    ))}
-                  </div>
-                </article>
-              ) : null}
             </>
-          ) : null}
+          ) : (
+            <div className="win32-empty-state">Run a search to resolve live, source-backed install and uninstall commands.</div>
+          )}
         </div>
       </div>
     </section>

@@ -27,7 +27,7 @@ import {
 import { recognize } from 'tesseract.js';
 import { IntuneAIDrawer } from './components/IntuneAIDrawer.js';
 import Phase1AuditPanels from './components/Phase1AuditPanels.js';
-import Win32PackageBuilderWorkspace from './components/Win32PackageBuilderWorkspace.js';
+import Win32UtilityWorkspace from './components/Win32UtilityWorkspace.js';
 
 type Row = Record<string, unknown>;
 type AuthState = { connected: boolean; upn: string; tenantId: string; displayName: string; mockMode?: boolean; hasWritePermissions?: boolean; scopes?: string[] };
@@ -180,14 +180,7 @@ function isScalar(value: unknown): boolean {
 function getStoredColumns(): VisibleColumnsState {
   try {
     const raw = window.localStorage.getItem('efm.visibleColumnsByView');
-    const parsed = raw ? JSON.parse(raw) : {};
-    const apps = Array.isArray(parsed?.apps) ? parsed.apps.map((item: unknown) => String(item)) : [];
-    if (apps.length === 1 && apps[0] === 'id') {
-      parsed.apps = [...(defaultColumns.apps ?? [])];
-    } else if (apps.includes('id') && !apps.includes('name')) {
-      parsed.apps = ['name', ...apps];
-    }
-    return parsed;
+    return raw ? JSON.parse(raw) : {};
   } catch {
     return {};
   }
@@ -213,19 +206,6 @@ function normalizePlatform(value: unknown): PlatformFilter | 'unknown' {
 
 function rowPlatform(row: Row): PlatformFilter | 'unknown' {
   return normalizePlatform(row.platform ?? row.operatingSystem ?? row.type ?? row.appType);
-}
-
-
-function appRowDisplayName(row: Row): string {
-  return toText(row.name ?? row.displayName ?? row.appName ?? row.id ?? 'Unknown app');
-}
-
-function tableCellText(row: Row, header: string, currentView: ViewName): string {
-  if (currentView === 'apps') {
-    if (header === 'name') return appRowDisplayName(row);
-    if (header === 'id') return appRowDisplayName(row);
-  }
-  return toText(row[header]);
 }
 
 export default function App() {
@@ -1306,7 +1286,7 @@ ${result.note}` : result.message);
             ) : null}
 
             {currentView === 'winget' ? (
-              <Win32PackageBuilderWorkspace onToast={pushToast} />
+              <Win32UtilityWorkspace initialQuery={win32UtilityQuery} />
             ) : currentView === 'ocr' ? (
               <div className="ocr-assistant">
                 <div className="ocr-assistant-header">
@@ -1365,7 +1345,7 @@ ${result.note}` : result.message);
                         }}
                         onContextMenu={(event) => onAppRowContextMenu(event, row)}
                       >
-                        {visibleHeaders.map((header) => <td key={`${String(row['id'] ?? index)}-${header}`}>{tableCellText(row, header, currentView)}</td>)}
+                        {visibleHeaders.map((header) => <td key={`${String(row['id'] ?? index)}-${header}`}>{toText(row[header])}</td>)}
                       </tr>
                     ))}
                   </tbody>

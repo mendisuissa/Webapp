@@ -233,7 +233,7 @@ export default function Win32PackageBuilderWorkspace({ onToast }: Props) {
           <div className="info-card drawer-card">
             <div className="section-title">Validation notes</div>
             <div className="readiness-list">
-              {resolved.notes.map((note, index) => (
+              {resolved.notes.map((note: string, index: number) => (
                 <div key={`note-${index}`} className="readiness-item ok"><span>{index + 1}</span><span>{note}</span></div>
               ))}
             </div>
@@ -241,7 +241,7 @@ export default function Win32PackageBuilderWorkspace({ onToast }: Props) {
           <div className="info-card drawer-card">
             <div className="section-title">Validation checklist</div>
             <div className="readiness-list">
-              {resolved.validationChecklist.map((note, index) => (
+              {resolved.validationChecklist.map((note: string, index: number) => (
                 <div key={`check-${index}`} className="readiness-item ok"><span>{index + 1}</span><span>{note}</span></div>
               ))}
             </div>

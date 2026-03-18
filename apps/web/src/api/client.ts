@@ -261,60 +261,124 @@ export async function getPlatformReadiness() {
   return response.data as PlatformReadinessResponse;
 }
 
-export type Win32SearchMode = 'quick' | 'deep' | 'catalog';
-export type Win32SourceKind = 'vendor' | 'silentinstallhq' | 'winget' | 'heuristic';
-export type Win32Confidence = 'high' | 'medium' | 'low';
 
-export interface Win32ResolvedRecord {
-  packageKey: string;
+export interface Win32SearchResultRecord {
+  id: string;
   name: string;
   publisher: string;
-  packageId: string;
-  source: Win32SourceKind;
-  confidence: Win32Confidence;
+  packageId?: string;
+  sourceType: 'winget' | 'silentinstallhq';
+  sourceLabel: string;
+  sourceUrl: string;
+  sourceTitle: string;
+  resolutionType: 'source_backed' | 'generated_detection';
+  confidence: 'high' | 'medium';
   installCommand: string;
   uninstallCommand: string;
-  detectionType: string;
+  detectionScript: string;
   detectionSummary: string;
-  detectScript: string;
   notes: string[];
-  validationChecklist: string[];
-  sourceUrl?: string;
-  alternativeSources?: Array<{ label: string; source: Win32SourceKind; url?: string }>;
-  installerFileName?: string;
-}
-
-export interface Win32CatalogMatch {
-  packageKey: string;
-  name: string;
-  publisher: string;
-  packageId: string;
+  evidence?: string[];
 }
 
 export interface Win32SearchResponse {
   query: string;
-  mode: Win32SearchMode;
-  catalogCount: number;
-  bestMatch: Win32CatalogMatch | null;
-  alternatives: Win32CatalogMatch[];
-  resolved: Win32ResolvedRecord | null;
+  mode: 'quick' | 'deep';
+  bestMatch: Win32SearchResultRecord | null;
+  alternatives: Win32SearchResultRecord[];
+  sourcesChecked: string[];
   message: string;
 }
 
-export async function searchWin32Resolver(query: string, mode: Win32SearchMode) {
+export async function searchWin32Packages(query: string, mode: 'quick' | 'deep' = 'quick') {
   const response = await api.get('/win32/search', { params: { q: query, mode } });
   return response.data as Win32SearchResponse;
 }
 
-export async function getWin32Catalog(query: string) {
-  const response = await api.get('/win32/catalog', { params: { q: query } });
-  return response.data as { rows: Win32CatalogMatch[]; count: number; message: string };
+// Compatibility shim for older imports used by some components
+export type Win32SearchMode = 'quick' | 'deep' | 'catalog';
+
+export interface Win32CatalogMatch {
+  packageKey: string;
+  name: string;
+  publisher?: string;
+  sourceUrl?: string;
 }
 
-export async function downloadWin32Bundle(packageKey: string, query: string) {
-  const response = await api.get('/win32/bundle', {
-    params: { packageKey, q: query },
-    responseType: 'blob'
-  });
+export interface Win32ResolvedRecord {
+  packageKey: string;
+  id: string;
+  name: string;
+  publisher?: string;
+  packageId?: string;
+  detectionType?: string;
+  detectionSummary: string;
+  installCommand: string;
+  uninstallCommand: string;
+  detectScript: string;
+  sourceUrl?: string;
+  source: 'vendor' | 'silentinstallhq' | 'winget' | 'heuristic' | string;
+  confidence: string | number;
+  notes: string[];
+  validationChecklist: string[];
+}
+
+export async function getWin32Catalog(prefix: string) {
+  const response = await api.get('/winget/search', { params: { q: prefix } });
+  const rows = Array.isArray(response.data?.rows) ? response.data.rows : [];
+  const mapped = rows.map((r: any) => ({
+    packageKey: r.packageIdentifier ?? r.packageKey ?? '',
+    name: r.name ?? '',
+    publisher: r.publisher ?? '',
+    sourceUrl: r.sourceUrl ?? ''
+  })) as Win32CatalogMatch[];
+  return { count: mapped.length, rows: mapped };
+}
+
+export async function searchWin32Resolver(query: string, mode: Win32SearchMode) {
+  const qMode = mode === 'catalog' ? 'quick' : (mode === 'deep' ? 'deep' : 'quick');
+  const response = await api.get('/win32/search', { params: { q: query, mode: qMode } });
+  const data = response.data as any;
+  const mapResolved = (item: any): Win32ResolvedRecord | null => {
+    if (!item) return null;
+    return {
+      packageKey: item.id ?? item.packageId ?? item.packageIdentifier ?? '',
+      id: item.id ?? '',
+      name: item.name ?? '',
+      publisher: item.publisher ?? '',
+      packageId: item.packageId ?? item.packageIdentifier ?? '',
+      detectionType: item.resolutionType ?? '',
+      detectionSummary: item.detectionSummary ?? '',
+      installCommand: item.installCommand ?? '',
+      uninstallCommand: item.uninstallCommand ?? '',
+      detectScript: item.detectionScript ?? '',
+      sourceUrl: item.sourceUrl ?? '',
+      source: (item.sourceType ?? item.source ?? 'winget') as any,
+      confidence: item.confidence ?? '',
+      notes: Array.isArray(item.notes) ? item.notes : [],
+      validationChecklist: Array.isArray(item.validationChecklist) ? item.validationChecklist : []
+    };
+  };
+
+  const alternatives = Array.isArray(data?.alternatives)
+    ? data.alternatives.map((item: any) => ({
+        packageKey: item.id ?? item.packageId ?? item.packageIdentifier ?? '',
+        name: item.name ?? '',
+        publisher: item.publisher ?? '',
+        sourceUrl: item.sourceUrl ?? ''
+      })) as Win32CatalogMatch[]
+    : [];
+
+  return {
+    resolved: mapResolved(data?.bestMatch ?? null),
+    alternatives,
+    catalogCount: data?.catalogCount ?? 0,
+    message: data?.message ?? ''
+  };
+}
+
+export async function downloadWin32Bundle(packageKey: string, name?: string) {
+  const url = `/win32/bundle/${encodeURIComponent(packageKey)}`;
+  const response = await api.get(url, { responseType: 'blob' as const });
   return response.data as Blob;
 }

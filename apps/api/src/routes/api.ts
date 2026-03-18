@@ -13,8 +13,7 @@ import { logger } from '../utils/logger.js';
 import { toCsv } from '../utils/safe.js';
 import { PrismaIncidentRepository } from '../storage/incidentRepository.js';
 import { postIntuneAi } from './intuneAi.js';
-import { buildBundleFiles, resolveWin32Package, searchWin32Catalog, type Win32SearchMode } from '../engines/win32Catalog.js';
-import { buildZip } from '../engines/win32Zip.js';
+import { resolveWin32Search } from '../engines/win32LiveResolver.js';
 
 const incidentRepo = new PrismaIncidentRepository();
 
@@ -1573,6 +1572,26 @@ apiRouter.get('/groups/search', async (req: Request, res: Response) => {
   }
 });
 
+
+apiRouter.get('/win32/search', async (req: Request, res: Response) => {
+  const query = String(req.query.q ?? '').trim();
+  const mode = String(req.query.mode ?? 'quick').trim() === 'deep' ? 'deep' : 'quick';
+
+  try {
+    const result = await resolveWin32Search(query, mode);
+    return res.json(result);
+  } catch (error) {
+    return res.status(500).json({
+      query,
+      mode,
+      bestMatch: null,
+      alternatives: [],
+      sourcesChecked: [],
+      message: error instanceof Error ? error.message : 'Win32 search failed.'
+    });
+  }
+});
+
 apiRouter.get('/winget/search', async (req: Request, res: Response) => {
   const query = String(req.query.q ?? '').trim();
   if (!query) return res.json({ rows: [], message: 'Enter a package name or package ID.' });
@@ -1850,76 +1869,6 @@ apiRouter.get('/apps/:id/publishing-state', async (req: Request, res: Response) 
     return res.json(state);
   } catch (error) {
     return res.status(500).json({ message: error instanceof Error ? error.message : 'Publishing state lookup failed.' });
-  }
-});
-
-
-apiRouter.get('/win32/search', async (req: Request, res: Response) => {
-  try {
-    const query = String(req.query.q ?? '').trim();
-    const rawMode = String(req.query.mode ?? 'quick').toLowerCase();
-    const mode: Win32SearchMode = rawMode === 'deep' || rawMode === 'catalog' ? rawMode : 'quick';
-    if (!query) {
-      return res.json({ query: '', mode, catalogCount: searchWin32Catalog('chrome', 'catalog').catalogCount, bestMatch: null, alternatives: [], resolved: null, message: 'Enter an app name to resolve packaging details.' });
-    }
-
-    const search = searchWin32Catalog(query, mode);
-    const resolved = resolveWin32Package(query, search.bestMatch?.packageKey);
-    const alternatives = search.alternatives.map((entry) => ({
-      packageKey: entry.packageKey,
-      name: entry.name,
-      publisher: entry.publisher,
-      packageId: entry.packageId
-    }));
-
-    return res.json({
-      query,
-      mode,
-      catalogCount: search.catalogCount,
-      bestMatch: search.bestMatch ? {
-        packageKey: search.bestMatch.packageKey,
-        name: search.bestMatch.name,
-        publisher: search.bestMatch.publisher,
-        packageId: search.bestMatch.packageId
-      } : null,
-      alternatives,
-      resolved,
-      message: resolved ? `Resolved packaging blueprint for ${resolved.name}.` : 'No packaging match found yet.'
-    });
-  } catch (error) {
-    return res.status(500).json({ message: error instanceof Error ? error.message : 'Win32 search failed.' });
-  }
-});
-
-apiRouter.get('/win32/catalog', async (req: Request, res: Response) => {
-  try {
-    const query = String(req.query.q ?? '').trim();
-    const search = searchWin32Catalog(query || 'chrome', 'catalog');
-    const rows = search.results.map((entry) => ({
-      packageKey: entry.packageKey,
-      name: entry.name,
-      publisher: entry.publisher,
-      packageId: entry.packageId
-    }));
-    return res.json({ rows, count: search.catalogCount, message: `${search.catalogCount} searchable catalog records are available.` });
-  } catch (error) {
-    return res.status(500).json({ rows: [], count: 0, message: error instanceof Error ? error.message : 'Failed to load Win32 catalog.' });
-  }
-});
-
-apiRouter.get('/win32/bundle', async (req: Request, res: Response) => {
-  try {
-    const query = String(req.query.q ?? '').trim();
-    const packageKey = String(req.query.packageKey ?? '').trim();
-    const resolved = resolveWin32Package(query || packageKey, packageKey || undefined);
-    const bundle = buildBundleFiles(resolved);
-    const zip = buildZip(bundle.files);
-
-    res.setHeader('Content-Type', 'application/zip');
-    res.setHeader('Content-Disposition', `attachment; filename=${bundle.packageName}-intune-package-source.zip`);
-    return res.send(zip);
-  } catch (error) {
-    return res.status(500).json({ message: error instanceof Error ? error.message : 'Failed to build Win32 package bundle.' });
   }
 });
 
