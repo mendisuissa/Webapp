@@ -1286,8 +1286,9 @@ ${result.note}` : result.message);
             ) : null}
 
             {currentView === 'winget' ? (
-              <Win32UtilityWorkspace initialQuery={win32UtilityQuery} />
+              <Win32UtilityWorkspace />
             ) : currentView === 'ocr' ? (
+
               <div className="ocr-assistant">
                 <div className="ocr-assistant-header">
                   <div>

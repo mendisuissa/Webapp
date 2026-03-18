@@ -2383,64 +2383,162 @@ textarea::placeholder { color: #68748e; }
   }
 }
 
+
+.win32-shell {
+  display: grid;
+  gap: 16px;
+}
+
+.win32-header-card,
+.win32-search-card {
+  display: grid;
+  gap: 14px;
+}
+
+.win32-search-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: end;
+}
+
+.win32-input-wrap {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.win32-label {
+  font-size: 0.78rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.win32-search-input {
+  width: 100%;
+}
+
+.win32-actions,
 .win32-mode-row {
   display: flex;
-  flex-wrap: wrap;
   gap: 10px;
-  margin-top: 14px;
+  flex-wrap: wrap;
 }
 
-.win32-mode-pill {
-  border: 1px solid rgba(255,255,255,0.08);
-  background: rgba(10, 17, 32, 0.86);
-  color: var(--text-muted);
-  border-radius: 999px;
-  padding: 8px 14px;
-  font-size: 0.82rem;
-  cursor: pointer;
+.win32-main-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(280px, 0.8fr);
+  gap: 16px;
 }
 
-.win32-mode-pill.is-active {
-  color: var(--text-primary);
-  border-color: rgba(90, 130, 255, 0.4);
-  background: rgba(57, 91, 209, 0.24);
-  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.04);
+.win32-left-stack,
+.win32-right-stack,
+.win32-empty-grid {
+  display: grid;
+  gap: 16px;
 }
 
-.win32-alt-choice {
-  width: 100%;
-  text-align: left;
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  border: 1px solid rgba(255,255,255,0.06);
-  border-radius: 14px;
-  background: rgba(8, 14, 28, 0.72);
-  color: var(--text-primary);
-  padding: 12px 14px;
-  cursor: pointer;
+.win32-command-grid-pretty {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
 }
 
-.win32-alt-choice:hover {
-  border-color: rgba(104, 140, 255, 0.32);
-}
-
-.subtle-text {
-  color: var(--text-muted);
-}
-
-.win32-bundle-list {
-  margin-top: 14px;
+.win32-code-card {
   display: grid;
   gap: 10px;
 }
 
-.win32-bundle-item {
-  border: 1px solid rgba(255,255,255,0.06);
-  border-radius: 12px;
-  padding: 10px 12px;
-  background: rgba(6, 11, 24, 0.68);
-  color: var(--text-secondary);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 0.82rem;
+.win32-code-head,
+.win32-card-top,
+.win32-alt-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.win32-alt-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.win32-alt-grid.compact {
+  grid-template-columns: 1fr;
+}
+
+.win32-alt-card {
+  display: grid;
+  gap: 8px;
+  padding: 14px;
+  border-radius: 18px;
+  border: 1px solid rgba(255,255,255,0.08);
+  background: rgba(10, 16, 30, 0.72);
+  color: inherit;
+  text-decoration: none;
+  transition: transform 0.18s ease, border-color 0.18s ease, background 0.18s ease;
+}
+
+.win32-alt-card:hover {
+  transform: translateY(-1px);
+  border-color: rgba(103, 126, 234, 0.34);
+  background: rgba(15, 22, 40, 0.9);
+}
+
+.win32-alt-title {
+  font-weight: 700;
+}
+
+.win32-alt-note,
+.win32-alt-open {
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.win32-source-tag {
+  display: inline-flex;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.08);
+  font-size: 0.78rem;
+}
+
+.win32-notice {
+  padding: 14px 16px;
+  border-radius: 18px;
+  border: 1px solid rgba(255,255,255,0.08);
+  background: rgba(255,255,255,0.04);
+}
+
+.win32-notice.success {
+  border-color: rgba(74, 222, 128, 0.22);
+  background: rgba(74, 222, 128, 0.09);
+}
+
+.win32-notice.warn {
+  border-color: rgba(245, 158, 11, 0.22);
+  background: rgba(245, 158, 11, 0.09);
+}
+
+.win32-notice.info {
+  border-color: rgba(96, 165, 250, 0.22);
+  background: rgba(96, 165, 250, 0.08);
+}
+
+.plain-list {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 8px;
+}
+
+@media (max-width: 1100px) {
+  .win32-main-grid,
+  .win32-search-row,
+  .win32-command-grid-pretty {
+    grid-template-columns: 1fr;
+  }
 }

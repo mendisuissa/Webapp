@@ -1,12 +1,83 @@
 import { useEffect, useMemo, useState } from 'react';
-import {
-  downloadWin32Bundle,
-  getWin32Catalog,
-  searchWin32Resolver,
-  type Win32CatalogMatch,
-  type Win32ResolvedRecord,
-  type Win32SearchMode
-} from '../api/client.js';
+import { api } from '../api/client.js';
+
+type Win32SearchMode = 'quick' | 'deep' | 'catalog';
+
+interface Win32CatalogMatch {
+  packageKey: string;
+  name: string;
+  publisher?: string;
+  sourceUrl?: string;
+}
+
+interface Win32ResolvedRecord {
+  packageKey?: string;
+  id?: string;
+  name: string;
+  publisher?: string;
+  packageId?: string;
+  detectionType?: string;
+  detectionSummary?: string;
+  installCommand?: string;
+  uninstallCommand?: string;
+  detectScript?: string;
+  sourceUrl?: string;
+  source?: string;
+  confidence?: string | number;
+  notes?: string[];
+  validationChecklist?: string[];
+}
+
+async function getWin32Catalog(prefix: string) {
+  const response = await api.get('/winget/search', { params: { q: prefix } });
+  const rows = Array.isArray(response.data?.rows) ? response.data.rows : [];
+  const mapped = rows.map((r: any) => ({
+    packageKey: r.packageIdentifier ?? r.packageKey ?? '',
+    name: r.name ?? '',
+    publisher: r.publisher ?? '',
+    sourceUrl: r.sourceUrl ?? ''
+  })) as Win32CatalogMatch[];
+  return { count: mapped.length, rows: mapped };
+}
+
+async function searchWin32Resolver(query: string, mode: Win32SearchMode) {
+  const qMode = mode === 'catalog' ? 'quick' : (mode === 'deep' ? 'deep' : 'quick');
+  const response = await api.get('/win32/search', { params: { q: query, mode: qMode } });
+  const data = response.data as any;
+  const mapResolved = (item: any): Win32ResolvedRecord | null => {
+    if (!item) return null;
+    return {
+      packageKey: item.id ?? item.packageId ?? item.packageIdentifier ?? '',
+      id: item.id ?? '',
+      name: item.name ?? '',
+      publisher: item.publisher ?? '',
+      packageId: item.packageId ?? item.packageIdentifier ?? '',
+      detectionType: item.resolutionType ?? '',
+      detectionSummary: item.detectionSummary ?? '',
+      installCommand: item.installCommand ?? '',
+      uninstallCommand: item.uninstallCommand ?? '',
+      detectScript: item.detectionScript ?? '',
+      sourceUrl: item.sourceUrl ?? '',
+      source: item.sourceType ?? item.source ?? '',
+      confidence: item.confidence ?? '',
+      notes: Array.isArray(item.notes) ? item.notes : [],
+      validationChecklist: Array.isArray(item.validationChecklist) ? item.validationChecklist : []
+    };
+  };
+
+  return {
+    resolved: mapResolved(data?.bestMatch ?? null),
+    alternatives: (Array.isArray(data?.alternatives) ? data.alternatives.map(mapResolved).filter(Boolean) : []) as Win32ResolvedRecord[],
+    catalogCount: data?.catalogCount ?? 0,
+    message: data?.message ?? ''
+  };
+}
+
+async function downloadWin32Bundle(packageKey: string, _name?: string) {
+  const url = `/win32/bundle/${encodeURIComponent(packageKey)}`;
+  const response = await api.get(url, { responseType: 'blob' as const });
+  return response.data as Blob;
+}
 
 type Props = {
   onToast?: (tone: 'info' | 'success' | 'warn' | 'error', text: string) => void;
@@ -18,14 +89,15 @@ const modeLabel: Record<Win32SearchMode, string> = {
   catalog: 'Catalog Only'
 };
 
-const sourceLabel: Record<Win32ResolvedRecord['source'], string> = {
+const sourceLabel: Record<string, string> = {
   vendor: 'Vendor',
   silentinstallhq: 'Silent Install HQ',
   winget: 'WinGet',
   heuristic: 'Heuristic'
 };
 
-function copyToClipboard(value: string, onToast?: Props['onToast']) {
+function copyToClipboard(value?: string, onToast?: Props['onToast']) {
+  if (!value) return;
   if (typeof navigator === 'undefined' || !navigator.clipboard) return;
   void navigator.clipboard.writeText(value);
   onToast?.('success', 'Copied to clipboard.');
@@ -48,7 +120,7 @@ export default function Win32PackageBuilderWorkspace({ onToast }: Props) {
   const [catalogCount, setCatalogCount] = useState(0);
   const [catalogPreview, setCatalogPreview] = useState<Win32CatalogMatch[]>([]);
   const [resolved, setResolved] = useState<Win32ResolvedRecord | null>(null);
-  const [alternatives, setAlternatives] = useState<Win32CatalogMatch[]>([]);
+  const [alternatives, setAlternatives] = useState<Win32ResolvedRecord[]>([]);
   const [message, setMessage] = useState('Resolve a package to generate packaging commands and a downloadable Intune source bundle.');
 
   useEffect(() => {
@@ -83,6 +155,10 @@ export default function Win32PackageBuilderWorkspace({ onToast }: Props) {
   async function buildBundle() {
     if (!resolved) {
       onToast?.('warn', 'Resolve an app first.');
+      return;
+    }
+    if (!resolved.packageKey) {
+      onToast?.('error', 'No package key available.');
       return;
     }
     setBuilding(true);
@@ -150,7 +226,7 @@ export default function Win32PackageBuilderWorkspace({ onToast }: Props) {
         <div className="hero-chips wrap" style={{ marginTop: '14px' }}>
           <span className="hero-chip">Catalog records: {catalogCount.toLocaleString()}</span>
           <span className="hero-chip subtle">Mode: {modeLabel[mode]}</span>
-          {resolved ? <span className="hero-chip subtle">Source: {sourceLabel[resolved.source]}</span> : null}
+          {resolved ? <span className="hero-chip subtle">Source: {sourceLabel[resolved.source ?? 'heuristic']}</span> : null}
           {resolved ? <span className="hero-chip subtle">Confidence: {resolved.confidence}</span> : null}
         </div>
       </div>
@@ -183,7 +259,7 @@ export default function Win32PackageBuilderWorkspace({ onToast }: Props) {
         <div className="section-title">Alternative matches</div>
         <div className="readiness-list">
           {alternatives.length > 0 ? alternatives.map((item, index) => (
-            <button key={`${item.packageKey}-${index}`} type="button" className="win32-alt-choice" onClick={() => { setQuery(item.name); void resolvePackage(item.name, mode); }}>
+            <button key={`${item.packageKey ?? item.id ?? index}`} type="button" className="win32-alt-choice" onClick={() => { setQuery(item.name); void resolvePackage(item.name, mode); }}>
               <span>{item.name}</span>
               <span className="subtle-text">{item.publisher}</span>
             </button>
@@ -233,7 +309,7 @@ export default function Win32PackageBuilderWorkspace({ onToast }: Props) {
           <div className="info-card drawer-card">
             <div className="section-title">Validation notes</div>
             <div className="readiness-list">
-              {resolved.notes.map((note: string, index: number) => (
+              {(resolved.notes ?? []).map((note: string, index: number) => (
                 <div key={`note-${index}`} className="readiness-item ok"><span>{index + 1}</span><span>{note}</span></div>
               ))}
             </div>
@@ -241,7 +317,7 @@ export default function Win32PackageBuilderWorkspace({ onToast }: Props) {
           <div className="info-card drawer-card">
             <div className="section-title">Validation checklist</div>
             <div className="readiness-list">
-              {resolved.validationChecklist.map((note: string, index: number) => (
+              {(resolved.validationChecklist ?? []).map((note: string, index: number) => (
                 <div key={`check-${index}`} className="readiness-item ok"><span>{index + 1}</span><span>{note}</span></div>
               ))}
             </div>

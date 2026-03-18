@@ -1,248 +1,250 @@
-import { useEffect, useMemo, useState } from 'react';
-import { searchWin32Packages, type Win32SearchResponse, type Win32SearchResultRecord } from '../api/client.js';
+import { useMemo, useState } from 'react';
+import { resolveWin32Package, type Win32AlternativeRecord, type Win32ResolveResponse } from '../api/client.js';
 
-type Props = {
-  initialQuery?: string;
+type Mode = 'quick' | 'deep';
+
+type NoticeTone = 'info' | 'success' | 'warn';
+
+const sourceLabel: Record<string, string> = {
+  winget: 'WinGet',
+  silentinstallhq: 'Silent Install HQ',
+  vendor: 'Vendor',
+  fallback: 'Fallback'
 };
-
-type SearchMode = 'quick' | 'deep';
 
 function copyToClipboard(value: string) {
   if (typeof navigator === 'undefined' || !navigator.clipboard) return;
   void navigator.clipboard.writeText(value);
 }
 
-function downloadPackageNotes(record: Win32SearchResultRecord) {
-  if (typeof window === 'undefined') return;
+function downloadNotes(payload: Win32ResolveResponse) {
+  if (typeof window === 'undefined' || !payload.bestMatch) return;
+  const m = payload.bestMatch;
   const text = [
-    `# ${record.name}`,
-    `Publisher: ${record.publisher}`,
-    `Source: ${record.sourceLabel}`,
-    `Source URL: ${record.sourceUrl}`,
-    `Confidence: ${record.confidence}`,
-    `Resolution type: ${record.resolutionType}`,
+    `# ${m.name}`,
+    '',
+    `Publisher: ${m.publisher}`,
+    `Source: ${sourceLabel[m.source] ?? m.source}`,
+    `Confidence: ${m.confidence}`,
+    `Source URL: ${m.sourceUrl ?? 'N/A'}`,
     '',
     '## Install command',
-    record.installCommand,
+    m.installCommand,
     '',
     '## Uninstall command',
-    record.uninstallCommand,
-    '',
-    '## Detection summary',
-    record.detectionSummary,
+    m.uninstallCommand,
     '',
     '## Detection script',
-    record.detectionScript,
+    m.detectScript,
     '',
-    '## Notes',
-    ...record.notes.map((item) => `- ${item}`),
+    '## Why selected',
+    m.whySelected,
     '',
     '## Evidence',
-    ...(record.evidence?.map((item) => `- ${item}`) ?? [])
+    ...m.evidence.map((item) => `- ${item}`),
+    '',
+    '## Notes',
+    ...m.notes.map((item) => `- ${item}`)
   ].join('\n');
-
-  const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+  const blob = new Blob([text], { type: 'text/markdown;charset=utf-8' });
   const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = `${record.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-win32-package-notes.txt`;
-  link.click();
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${m.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-win32-notes.md`;
+  a.click();
   URL.revokeObjectURL(url);
 }
 
-function SourceBadge({ value }: { value: string }) {
-  const safe = value.toLowerCase().includes('winget') ? 'winget' : 'silentinstallhq';
-  return <span className={`win32-badge win32-badge-${safe}`}>Source: {value}</span>;
+function Notice({ tone, children }: { tone: NoticeTone; children: React.ReactNode }) {
+  return <div className={`win32-notice ${tone}`}>{children}</div>;
 }
 
-function ConfidenceBadge({ value }: { value: 'high' | 'medium' }) {
-  return <span className={`win32-badge win32-confidence-${value}`}>Confidence: {value}</span>;
+function AlternativeCard({ item }: { item: Win32AlternativeRecord }) {
+  return (
+    <a className="win32-alt-card" href={item.url} target="_blank" rel="noreferrer">
+      <div className="win32-alt-top">
+        <span className="win32-source-tag">{sourceLabel[item.source] ?? item.source}</span>
+        <span className="win32-alt-open">Open</span>
+      </div>
+      <div className="win32-alt-title">{item.title}</div>
+      <div className="win32-alt-note">{item.note}</div>
+    </a>
+  );
 }
 
-export default function Win32UtilityWorkspace({ initialQuery = '' }: Props) {
-  const [query, setQuery] = useState(initialQuery || 'Beyond Compare');
-  const [mode, setMode] = useState<SearchMode>('quick');
+export default function Win32UtilityWorkspace() {
+  const [query, setQuery] = useState('Google Chrome');
+  const [mode, setMode] = useState<Mode>('quick');
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-  const [result, setResult] = useState<Win32SearchResponse | null>(null);
-  const [selectedId, setSelectedId] = useState('');
+  const [result, setResult] = useState<Win32ResolveResponse | null>(null);
 
-  async function runSearch(activeQuery = query, activeMode = mode) {
-    const trimmed = activeQuery.trim();
+  const best = result?.bestMatch ?? null;
+  const hasResult = !!best;
+
+  const checkedSources = useMemo(() => result?.checkedSources ?? ['WinGet', 'Silent Install HQ', 'Vendor search'], [result]);
+
+  async function runResolve() {
+    const trimmed = query.trim();
     if (!trimmed) return;
     setLoading(true);
-    setError('');
     try {
-      const response = await searchWin32Packages(trimmed, activeMode);
-      setResult(response);
-      setSelectedId(response.bestMatch?.id ?? response.alternatives[0]?.id ?? '');
-    } catch (searchError) {
-      setError(searchError instanceof Error ? searchError.message : 'Search failed.');
+      const payload = await resolveWin32Package(trimmed);
+      setResult(payload);
     } finally {
       setLoading(false);
     }
   }
 
-  useEffect(() => {
-    void runSearch(query, mode);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const records = useMemo(() => {
-    const items: Win32SearchResultRecord[] = [];
-    if (result?.bestMatch) items.push(result.bestMatch);
-    items.push(...(result?.alternatives ?? []));
-    return items;
-  }, [result]);
-
-  const selected = useMemo(() => records.find((item) => item.id === selectedId) ?? records[0] ?? null, [records, selectedId]);
-
   return (
-    <section className="win32-workspace-shell">
-      <div className="win32-hero-card">
+    <section className="win32-shell">
+      <div className="win32-header-card info-card drawer-card accent">
         <div>
-          <div className="win32-kicker">Live source resolution</div>
-          <h2 className="win32-title">Win32 Packaging Assistant</h2>
-          <p className="win32-subtitle">
-            Search WinGet first, then trusted external sources. If no reliable source exists, the app says so instead of inventing commands.
-          </p>
+          <div className="section-title">Win32 Utility</div>
+          <div className="summary-text">Search live packaging sources, compare alternatives, and only return source-backed commands when a reliable match is found.</div>
         </div>
-        <div className="win32-hero-actions">
-          <button className="win32-primary-button" type="button" disabled={loading} onClick={() => void runSearch()}>
-            {loading ? 'Resolving…' : mode === 'deep' ? 'Run deep search' : 'Resolve package'}
-          </button>
-          <button className="win32-secondary-button" type="button" disabled={!selected} onClick={() => selected && downloadPackageNotes(selected)}>
-            Export package notes
-          </button>
+        <div className="hero-chips wrap">
+          <span className="hero-chip">Sources: WinGet + Silent Install HQ + vendor search</span>
+          <span className="hero-chip subtle">Mode: {mode === 'quick' ? 'Quick resolve' : 'Deep search'}</span>
         </div>
       </div>
 
-      <div className="win32-toolbar">
-        <label className="win32-search-box">
-          <span className="win32-search-label">Search application</span>
-          <input
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter') void runSearch();
-            }}
-            placeholder="Beyond Compare, Notepad++, TreeSize"
-            className="win32-search-input"
-          />
-        </label>
-
-        <div className="win32-filter-group">
-          <span className="win32-search-label">Search mode</span>
-          <div className="win32-pill-row">
-            {(['quick', 'deep'] as const).map((item) => (
-              <button key={item} type="button" className={`win32-filter-pill ${mode === item ? 'is-active' : ''}`} onClick={() => setMode(item)}>
-                {item === 'quick' ? 'Quick search' : 'Deep search'}
-              </button>
-            ))}
+      <div className="win32-search-card info-card drawer-card">
+        <div className="win32-search-row">
+          <label className="win32-input-wrap">
+            <span className="win32-label">Search application</span>
+            <input
+              className="column-search win32-search-input"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Beyond Compare, TreeSize, Advanced IP Scanner"
+            />
+          </label>
+          <div className="win32-actions">
+            <button className="btn btn-primary" type="button" onClick={() => void runResolve()} disabled={loading || !query.trim()}>
+              {loading ? 'Searching…' : 'Resolve package'}
+            </button>
+            <button className="btn btn-secondary" type="button" onClick={() => result && downloadNotes(result)} disabled={!hasResult}>
+              Export package notes
+            </button>
           </div>
+        </div>
+        <div className="win32-mode-row">
+          <button className={`segment-btn ${mode === 'quick' ? 'active' : ''}`} type="button" onClick={() => setMode('quick')}>Quick search</button>
+          <button className={`segment-btn ${mode === 'deep' ? 'active' : ''}`} type="button" onClick={() => setMode('deep')}>Deep search</button>
+        </div>
+        <div className="hero-chips wrap" style={{ marginTop: '12px' }}>
+          {checkedSources.map((source) => (
+            <span key={source} className="hero-chip subtle">Checked: {source}</span>
+          ))}
         </div>
       </div>
 
-      <div className="win32-layout-grid">
-        <aside className="win32-results-panel">
-          <div className="win32-panel-title-row">
-            <h3 className="win32-panel-title">Matches</h3>
-            <span className="win32-count-pill">{records.length}</span>
+      {loading ? (
+        <Notice tone="info">Looking across packaging sources and ranking the best match for <strong>{query}</strong>.</Notice>
+      ) : null}
+
+      {result && !result.ok ? (
+        <div className="win32-empty-grid">
+          <div className="info-card drawer-card accent">
+            <div className="section-title">No reliable source found</div>
+            <div className="summary-text">{result.message}</div>
+            <div className="readiness-list" style={{ marginTop: '14px' }}>
+              <div className="readiness-item"><span>1</span><span>Try a simpler product name such as the vendor product name only.</span></div>
+              <div className="readiness-item"><span>2</span><span>Use Deep Search to review community or vendor candidates.</span></div>
+              <div className="readiness-item"><span>3</span><span>Open one of the sources below to validate packaging guidance before rollout.</span></div>
+            </div>
           </div>
-          <div className="win32-empty-state" style={{ marginBottom: '12px' }}>
-            {result?.message ?? 'Search WinGet and external sources from one place.'}
-            {result?.sourcesChecked?.length ? ` Sources checked: ${result.sourcesChecked.join(', ')}.` : ''}
+          <div className="win32-alt-grid">
+            {result.alternatives.map((item) => <AlternativeCard key={item.url} item={item} />)}
           </div>
-          {error ? <div className="win32-empty-state">{error}</div> : null}
-          <div className="win32-results-list">
-            {records.map((record, index) => (
-              <button key={record.id} type="button" className={`win32-result-card ${selected?.id === record.id ? 'is-selected' : ''}`} onClick={() => setSelectedId(record.id)}>
-                <div className="win32-result-header">
-                  <div>
-                    <div className="win32-result-name">{index === 0 && result?.bestMatch?.id === record.id ? 'Best match • ' : ''}{record.name}</div>
-                    <div className="win32-result-publisher">{record.publisher}</div>
-                  </div>
-                  <ConfidenceBadge value={record.confidence} />
-                </div>
-                <div className="win32-result-meta">
-                  <SourceBadge value={record.sourceLabel} />
-                  <span className="win32-result-date">{record.packageId ?? record.sourceTitle}</span>
-                </div>
-              </button>
-            ))}
-            {!loading && records.length === 0 ? <div className="win32-empty-state">No reliable source-backed command set was found for this query.</div> : null}
-          </div>
-        </aside>
-
-        <div className="win32-detail-panel">
-          {selected ? (
-            <>
-              <div className="win32-summary-card">
-                <div className="win32-summary-header">
-                  <div>
-                    <div className="win32-summary-title">{selected.name}</div>
-                    <div className="win32-summary-meta">{selected.publisher}{selected.packageId ? ` • ${selected.packageId}` : ''}</div>
-                  </div>
-                  <div className="win32-summary-badges">
-                    <SourceBadge value={selected.sourceLabel} />
-                    <ConfidenceBadge value={selected.confidence} />
-                    <a href={selected.sourceUrl} target="_blank" rel="noreferrer" className="win32-link-button">Open source</a>
-                  </div>
-                </div>
-                <div className="win32-summary-note">{selected.detectionSummary}</div>
-              </div>
-
-              <div className="win32-command-grid">
-                <article className="win32-command-card">
-                  <div className="win32-command-header">
-                    <h3>Install command</h3>
-                    <button type="button" className="win32-copy-button" onClick={() => copyToClipboard(selected.installCommand)}>Copy</button>
-                  </div>
-                  <pre className="win32-code-block">{selected.installCommand}</pre>
-                </article>
-
-                <article className="win32-command-card">
-                  <div className="win32-command-header">
-                    <h3>Uninstall command</h3>
-                    <button type="button" className="win32-copy-button" onClick={() => copyToClipboard(selected.uninstallCommand)}>Copy</button>
-                  </div>
-                  <pre className="win32-code-block">{selected.uninstallCommand}</pre>
-                </article>
-              </div>
-
-              <article className="win32-detection-card">
-                <div className="win32-command-header">
-                  <div>
-                    <h3>Detection script</h3>
-                    <div className="win32-detection-subtitle">Generated from source clues, not from a fake install template.</div>
-                  </div>
-                  <button type="button" className="win32-copy-button" onClick={() => copyToClipboard(selected.detectionScript)}>Copy</button>
-                </div>
-                <pre className="win32-code-block win32-script-block">{selected.detectionScript}</pre>
-              </article>
-
-              <div className="win32-lower-grid">
-                <article className="win32-list-card">
-                  <h3>Notes</h3>
-                  <div className="win32-list-stack">
-                    {selected.notes.map((note) => <div key={note} className="win32-list-item">{note}</div>)}
-                  </div>
-                </article>
-                <article className="win32-list-card">
-                  <h3>Evidence</h3>
-                  <div className="win32-list-stack">
-                    {(selected.evidence?.length ? selected.evidence : ['No explicit evidence lines were captured.']).map((item) => (
-                      <div key={item} className="win32-list-item">{item}</div>
-                    ))}
-                  </div>
-                </article>
-              </div>
-            </>
-          ) : (
-            <div className="win32-empty-state">Run a search to resolve live, source-backed install and uninstall commands.</div>
-          )}
         </div>
-      </div>
+      ) : null}
+
+      {hasResult ? (
+        <div className="win32-main-grid">
+          <div className="win32-left-stack">
+            <div className="info-card drawer-card accent">
+              <div className="win32-card-top">
+                <div>
+                  <div className="section-title">Best match</div>
+                  <div className="summary-text">{best.name} • {best.publisher}</div>
+                </div>
+                <div className="hero-chips wrap">
+                  <span className="hero-chip">Source: {sourceLabel[best.source] ?? best.source}</span>
+                  <span className={`hero-chip subtle win32-confidence-pill win32-confidence-${best.confidence}`}>Confidence: {best.confidence}</span>
+                </div>
+              </div>
+              <div className="detail-list">
+                <div className="detail-row"><div className="detail-key">Package ID</div><div className="detail-value">{best.packageId}</div></div>
+                <div className="detail-row stack"><div className="detail-key">Why selected</div><div className="detail-value">{best.whySelected}</div></div>
+                <div className="detail-row stack"><div className="detail-key">Evidence</div><div className="detail-value">{best.evidence.join(' • ')}</div></div>
+              </div>
+              {best.sourceUrl ? (
+                <div className="drawer-actions compact" style={{ marginTop: '12px' }}>
+                  <a className="btn btn-secondary" href={best.sourceUrl} target="_blank" rel="noreferrer">Open source</a>
+                </div>
+              ) : null}
+            </div>
+
+            <div className="info-card drawer-card">
+              <div className="section-title">Commands</div>
+              <div className="win32-command-grid-pretty">
+                <div className="win32-code-card">
+                  <div className="win32-code-head">
+                    <span>Install command</span>
+                    <button className="btn btn-secondary" type="button" onClick={() => copyToClipboard(best.installCommand)}>Copy</button>
+                  </div>
+                  <pre className="code-surface">{best.installCommand}</pre>
+                </div>
+                <div className="win32-code-card">
+                  <div className="win32-code-head">
+                    <span>Uninstall command</span>
+                    <button className="btn btn-secondary" type="button" onClick={() => copyToClipboard(best.uninstallCommand)}>Copy</button>
+                  </div>
+                  <pre className="code-surface">{best.uninstallCommand}</pre>
+                </div>
+              </div>
+            </div>
+
+            <div className="info-card drawer-card">
+              <div className="win32-code-head">
+                <div>
+                  <div className="section-title">Detection script</div>
+                  <div className="panel-caption">Generated from source-backed evidence and standard uninstall registry locations.</div>
+                </div>
+                <button className="btn btn-secondary" type="button" onClick={() => copyToClipboard(best.detectScript)}>Copy script</button>
+              </div>
+              <pre className="code-surface">{best.detectScript}</pre>
+            </div>
+          </div>
+
+          <div className="win32-right-stack">
+            <Notice tone={best.source === 'winget' ? 'success' : 'warn'}>
+              {best.source === 'winget'
+                ? 'This result is source-backed from WinGet. Detection is generated, so validate before production rollout.'
+                : 'This result came from a community or fallback path. Validate commands against the linked source before production rollout.'}
+            </Notice>
+
+            <div className="info-card drawer-card">
+              <div className="section-title">Alternative matches</div>
+              {result?.alternatives?.length ? (
+                <div className="win32-alt-grid compact">
+                  {result.alternatives.map((item) => <AlternativeCard key={item.url} item={item} />)}
+                </div>
+              ) : (
+                <div className="summary-text">No additional alternatives were returned for this query.</div>
+              )}
+            </div>
+
+            <div className="info-card drawer-card">
+              <div className="section-title">Packaging notes</div>
+              <ul className="plain-list">
+                {best.notes.map((note) => <li key={note}>{note}</li>)}
+              </ul>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }

@@ -1,15 +1,19 @@
-This pack fixes the previous issue where App.tsx did not include the new Win32 Utility view.
+Apply these files as a delta on top of your current Webapp repo.
 
-Included:
-- apps/web/src/App.tsx  -> merged shell with sidebar + Win32 Utility view wired in
+Updated files:
+- apps/api/src/engines/win32LiveResolver.ts
+- apps/api/src/routes/api.ts
+- apps/web/src/api/client.ts
 - apps/web/src/components/Win32UtilityWorkspace.tsx
-- apps/web/src/components/win32UtilitySeed.ts
-- apps/web/src/styles/index-delta-additions.css
+- apps/web/src/App.tsx
+- apps/web/src/index.css
 
-Merge notes:
-1. Replace your current apps/web/src/App.tsx with the one in this ZIP.
-2. Add the two component files under apps/web/src/components/.
-3. Append or replace your index-delta-additions.css with the one in this ZIP.
-4. Ensure your main stylesheet imports index-delta-additions.css.
+What changed:
+- Replaced the rough inline Win32 Utility UI with a cleaner workspace that matches the current design language better.
+- Added a live resolver route: GET /api/win32/resolve?q=...
+- Resolver checks WinGet first, then Silent Install HQ, then returns a clean no-result state with source links.
+- Results now show source, evidence, alternatives, and a better empty state instead of a broken-looking screen.
 
-This is a UI-integrated delta baseline with mock/seed data for the Win32 Utility workspace.
+Notes:
+- The detection script is still generated from source clues and standard registry paths. Validate before production.
+- Silent Install HQ results are community-sourced. Treat them as medium confidence.

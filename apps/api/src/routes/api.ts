@@ -13,7 +13,7 @@ import { logger } from '../utils/logger.js';
 import { toCsv } from '../utils/safe.js';
 import { PrismaIncidentRepository } from '../storage/incidentRepository.js';
 import { postIntuneAi } from './intuneAi.js';
-import { resolveWin32Search } from '../engines/win32LiveResolver.js';
+import { resolveWin32Package } from '../engines/win32LiveResolver.js';
 
 const incidentRepo = new PrismaIncidentRepository();
 
@@ -1572,26 +1572,6 @@ apiRouter.get('/groups/search', async (req: Request, res: Response) => {
   }
 });
 
-
-apiRouter.get('/win32/search', async (req: Request, res: Response) => {
-  const query = String(req.query.q ?? '').trim();
-  const mode = String(req.query.mode ?? 'quick').trim() === 'deep' ? 'deep' : 'quick';
-
-  try {
-    const result = await resolveWin32Search(query, mode);
-    return res.json(result);
-  } catch (error) {
-    return res.status(500).json({
-      query,
-      mode,
-      bestMatch: null,
-      alternatives: [],
-      sourcesChecked: [],
-      message: error instanceof Error ? error.message : 'Win32 search failed.'
-    });
-  }
-});
-
 apiRouter.get('/winget/search', async (req: Request, res: Response) => {
   const query = String(req.query.q ?? '').trim();
   if (!query) return res.json({ rows: [], message: 'Enter a package name or package ID.' });
@@ -1942,6 +1922,24 @@ apiRouter.get('/winget/migration-candidates', async (req: Request, res: Response
     return res.json({ rows, message: rows.length ? 'WinGet migration candidates loaded.' : 'No WinGet migration candidates identified yet.' });
   } catch (error) {
     return res.status(500).json({ rows: [], message: error instanceof Error ? error.message : 'Failed to load WinGet migration candidates.' });
+  }
+});
+
+
+apiRouter.get('/win32/resolve', async (req: Request, res: Response) => {
+  try {
+    const query = String(req.query.q ?? '');
+    const result = await resolveWin32Package(query);
+    return res.json(result);
+  } catch (error) {
+    return res.status(500).json({
+      ok: false,
+      query: String(req.query.q ?? ''),
+      message: error instanceof Error ? error.message : 'Failed to resolve package.',
+      bestMatch: null,
+      alternatives: [],
+      checkedSources: ['WinGet', 'Silent Install HQ', 'Vendor search']
+    });
   }
 });
 
