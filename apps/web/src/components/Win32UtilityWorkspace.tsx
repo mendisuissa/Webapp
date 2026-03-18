@@ -41,10 +41,10 @@ function downloadNotes(payload: Win32ResolveResponse) {
     m.whySelected,
     '',
     '## Evidence',
-    ...m.evidence.map((item) => `- ${item}`),
+    ...m.evidence.map((item: string) => `- ${item}`),
     '',
     '## Notes',
-    ...m.notes.map((item) => `- ${item}`)
+    ...m.notes.map((item: string) => `- ${item}`)
   ].join('\n');
   const blob = new Blob([text], { type: 'text/markdown;charset=utf-8' });
   const url = URL.createObjectURL(blob);
@@ -133,7 +133,7 @@ export default function Win32UtilityWorkspace() {
           <button className={`segment-btn ${mode === 'deep' ? 'active' : ''}`} type="button" onClick={() => setMode('deep')}>Deep search</button>
         </div>
         <div className="hero-chips wrap" style={{ marginTop: '12px' }}>
-          {checkedSources.map((source) => (
+          {checkedSources.map((source: string) => (
             <span key={source} className="hero-chip subtle">Checked: {source}</span>
           ))}
         </div>
@@ -155,7 +155,7 @@ export default function Win32UtilityWorkspace() {
             </div>
           </div>
           <div className="win32-alt-grid">
-            {result.alternatives.map((item) => <AlternativeCard key={item.url} item={item} />)}
+            {result.alternatives.map((item: Win32AlternativeRecord) => <AlternativeCard key={item.url} item={item} />)}
           </div>
         </div>
       ) : null}
@@ -229,7 +229,7 @@ export default function Win32UtilityWorkspace() {
               <div className="section-title">Alternative matches</div>
               {result?.alternatives?.length ? (
                 <div className="win32-alt-grid compact">
-                  {result.alternatives.map((item) => <AlternativeCard key={item.url} item={item} />)}
+                  {result.alternatives.map((item: Win32AlternativeRecord) => <AlternativeCard key={item.url} item={item} />)}
                 </div>
               ) : (
                 <div className="summary-text">No additional alternatives were returned for this query.</div>
@@ -239,7 +239,7 @@ export default function Win32UtilityWorkspace() {
             <div className="info-card drawer-card">
               <div className="section-title">Packaging notes</div>
               <ul className="plain-list">
-                {best.notes.map((note) => <li key={note}>{note}</li>)}
+                {best.notes.map((note: string) => <li key={note}>{note}</li>)}
               </ul>
             </div>
           </div>

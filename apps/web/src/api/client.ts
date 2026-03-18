@@ -194,34 +194,55 @@ export async function searchWingetPackages(query: string) {
   const response = await api.get('/winget/search', { params: { q: query } });
   return response.data as { rows: WingetPackageRecord[]; message: string };
 }
-
-export async function getPublishedWingetApps() {
-  const response = await api.get('/winget/published');
-  return response.data as PublishedWingetListResponse;
-}
-
 export async function deployWingetApp(payload: {
   packageIdentifier: string;
-  displayName?: string;
-  publisher?: string;
-  installIntent: 'required' | 'available';
-  runAsAccount: 'system' | 'user';
-  updateMode: 'auto' | 'manual';
+  displayName: string;
+  publisher: string;
+  installIntent?: 'required' | 'available';
+  runAsAccount?: 'system' | 'user';
+  updateMode?: 'auto' | 'manual';
+  targets?: Array<{ groupId: string; displayName?: string; targetType?: 'users' | 'devices' }>;
+  reuseAssignments?: boolean;
   assignNow?: boolean;
   icon?: WingetIconInput;
-  targets: Array<{ groupId: string; targetType: 'users' | 'devices'; displayName?: string }>;
 }) {
   const response = await api.post('/winget/deploy', payload);
-  return response.data as { ok: boolean; message: string; appId?: string; createdAssignments?: number; publishingState?: string; operationStatus?: string };
+  return response.data as { ok: boolean; message: string; appId?: string; createdAssignments?: number; publishingState?: string; operationStatus?: string; displayName?: string; appName?: string };
+}
+export interface Win32PackageBundleRequest {
+  name?: string;
+  appName?: string;
+  publisher?: string;
+  packageId?: string;
+  installCommand?: string;
+  uninstallCommand?: string;
+  detectScript?: string;
+  detectionType?: string;
+  detectionSummary?: string;
+  source?: string;
+  confidence?: string | number;
+  notes?: string[];
 }
 
+export async function downloadWin32PackageBundle(
+  payload: Win32PackageBundleRequest
+): Promise<Blob> {
+  const response = await fetch('/api/win32/bundle', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(payload)
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to build package bundle: ${response.status}`);
+  }
+
+  const blob = await response.blob();
+  return blob;
+}
 export async function linkWingetToExistingApp(appId: string, payload: {
-  packageIdentifier: string;
-  displayName?: string;
-  publisher?: string;
-  installIntent: 'required' | 'available';
-  runAsAccount: 'system' | 'user';
-  updateMode: 'auto' | 'manual';
   reuseAssignments: boolean;
   assignNow?: boolean;
   icon?: WingetIconInput;
@@ -297,3 +318,4 @@ export async function resolveWin32Package(query: string) {
   const response = await api.get('/win32/resolve', { params: { q: query } });
   return response.data as Win32ResolveResponse;
 }
+

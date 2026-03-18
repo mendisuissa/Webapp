@@ -10,6 +10,7 @@ import {
   getDashboardImpact,
   getPlatformReadiness,
   getView,
+  downloadWin32PackageBundle,
   getWingetMigrationCandidates,
   linkWingetToExistingApp,
   refreshData,
@@ -27,7 +28,6 @@ import {
 import { recognize } from 'tesseract.js';
 import { IntuneAIDrawer } from './components/IntuneAIDrawer.js';
 import Phase1AuditPanels from './components/Phase1AuditPanels.js';
-import Win32UtilityWorkspace from './components/Win32UtilityWorkspace.js';
 
 type Row = Record<string, unknown>;
 type AuthState = { connected: boolean; upn: string; tenantId: string; displayName: string; mockMode?: boolean; hasWritePermissions?: boolean; scopes?: string[] };
@@ -180,7 +180,13 @@ function isScalar(value: unknown): boolean {
 function getStoredColumns(): VisibleColumnsState {
   try {
     const raw = window.localStorage.getItem('efm.visibleColumnsByView');
-    return raw ? JSON.parse(raw) : {};
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as VisibleColumnsState;
+    const appsColumns = parsed.apps ?? [];
+    if (appsColumns.includes('id') && !appsColumns.includes('name')) {
+      parsed.apps = appsColumns.map((column) => (column == 'id' ? 'name' : column));
+    }
+    return parsed;
   } catch {
     return {};
   }
@@ -206,6 +212,23 @@ function normalizePlatform(value: unknown): PlatformFilter | 'unknown' {
 
 function rowPlatform(row: Row): PlatformFilter | 'unknown' {
   return normalizePlatform(row.platform ?? row.operatingSystem ?? row.type ?? row.appType);
+}
+
+
+function getAppDisplayLabel(row: Row): string {
+  return toText(row.name ?? row.displayName ?? row.appName ?? row.packageName ?? row.id ?? '');
+}
+
+function getHeaderLabel(view: ViewName, header: string): string {
+  if (view === 'apps' && header === 'id') return 'App name';
+  return toLabel(header);
+}
+
+function getCellDisplayValue(view: ViewName, row: Row, header: string): string {
+  if (view === 'apps' && header === 'id') {
+    return getAppDisplayLabel(row);
+  }
+  return toText(row[header]);
 }
 
 export default function App() {
@@ -578,7 +601,7 @@ exit 1`,
     const row = rows[selectedIndex];
     if (!row) return;
 
-    setDetailsSummary(toText(row['name'] ?? row['deviceName'] ?? row['displayName'] ?? row['appName'] ?? 'Row selected'));
+    setDetailsSummary(currentView === 'apps' ? getAppDisplayLabel(row) : toText(row['name'] ?? row['deviceName'] ?? row['displayName'] ?? row['appName'] ?? 'Row selected'));
     setDetailsText(toText(row['details'] ?? row));
   }, [selectedIndex, rows]);
 
@@ -1012,6 +1035,36 @@ ${result.note}` : result.message);
     }
   }
 
+
+  async function onDownloadWin32PackageBundle() {
+    try {
+      const blob = await downloadWin32PackageBundle({
+        name: activeWin32Preset.name,
+        publisher: activeWin32Preset.publisher,
+        packageId: activeWin32Preset.packageId,
+        installCommand: activeWin32Preset.installCommand,
+        uninstallCommand: activeWin32Preset.uninstallCommand,
+        detectScript: activeWin32Preset.detectScript,
+        detectionType: activeWin32Preset.detectionType,
+        detectionSummary: activeWin32Preset.detectionSummary,
+        source: activeWin32Preset.source,
+        confidence: activeWin32Preset.confidence,
+        notes: activeWin32Preset.notes
+      });
+      const url = window.URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      const safeName = activeWin32Preset.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'win32-package';
+      anchor.href = url;
+      anchor.download = `${safeName}-intune-package.zip`;
+      anchor.click();
+      window.URL.revokeObjectURL(url);
+      pushToast('success', `${activeWin32Preset.name} package bundle downloaded.`);
+    } catch (error) {
+      const message = (error as any)?.response?.data?.message || (error as Error)?.message || 'Package bundle download failed.';
+      pushToast('error', message);
+    }
+  }
+
   function onAppRowContextMenu(event: MouseEvent<HTMLTableRowElement>, row: Row) {
     if (currentView !== 'apps') return;
     event.preventDefault();
@@ -1277,7 +1330,7 @@ ${result.note}` : result.message);
                     return (
                       <label key={header} className="column-option">
                         <input type="checkbox" checked={checked} onChange={() => onToggleColumn(header)} />
-                        <span>{toLabel(header)}</span>
+                        <span>{getHeaderLabel(currentView, header)}</span>
                       </label>
                     );
                   })}
@@ -1286,9 +1339,73 @@ ${result.note}` : result.message);
             ) : null}
 
             {currentView === 'winget' ? (
-              <Win32UtilityWorkspace />
-            ) : currentView === 'ocr' ? (
+              <div className="winget-workspace-grid enhanced">
+                <div className="info-card drawer-card accent">
+                  <div className="section-title">Win32 Utility</div>
+                  <div className="summary-text">Find silent install, uninstall, and detection logic for Intune-ready app packaging without leaving the workspace.</div>
+                  <div className="drawer-actions compact wrap">
+                    <input
+                      className="column-search"
+                      value={win32UtilityQuery}
+                      onChange={(e) => setWin32UtilityQuery(e.target.value)}
+                      placeholder="Search app name or paste a WinGet package ID"
+                      style={{ minWidth: '260px', flex: '1 1 280px' }}
+                    />
+                    <button className="btn btn-primary" type="button" onClick={() => pushToast('success', `${activeWin32Preset.name} ready for packaging review.`)}>Resolve package</button>
+                    <button className="btn btn-secondary" type="button" onClick={onDownloadWin32PackageBundle}>Download package folder</button>
+                    <button className="btn btn-secondary" type="button" onClick={() => void onCopyValue(activeWin32Preset.installCommand)}>Copy install</button>
+                  </div>
+                  <div className="hero-chips wrap" style={{ marginTop: '14px' }}>
+                    <span className="hero-chip">Source: {activeWin32Preset.source}</span>
+                    <span className="hero-chip subtle">Confidence: {activeWin32Preset.confidence}</span>
+                    <span className="hero-chip subtle">Package: {activeWin32Preset.packageId}</span>
+                  </div>
+                </div>
 
+                <div className="info-card drawer-card">
+                  <div className="section-title">Resolved package</div>
+                  <div className="detail-list">
+                    <div className="detail-row"><div className="detail-key">App</div><div className="detail-value">{activeWin32Preset.name}</div></div>
+                    <div className="detail-row"><div className="detail-key">Publisher</div><div className="detail-value">{activeWin32Preset.publisher}</div></div>
+                    <div className="detail-row"><div className="detail-key">Detection</div><div className="detail-value">{activeWin32Preset.detectionType}</div></div>
+                    <div className="detail-row stack"><div className="detail-key">Recommendation</div><div className="detail-value">{activeWin32Preset.detectionSummary}</div></div>
+                  </div>
+                  <div className="drawer-actions compact wrap" style={{ marginTop: '12px' }}>
+                    <button className="btn btn-secondary" type="button" onClick={() => openWingetStudio('deploy')}>Create from catalog</button>
+                    <button className="btn btn-secondary" type="button" onClick={() => void onCopyValue(activeWin32Preset.detectScript)}>Copy detect script</button>
+                  </div>
+                </div>
+
+                <div className="info-card drawer-card">
+                  <div className="section-title">Validation notes</div>
+                  <div className="readiness-list">
+                    {activeWin32Preset.notes.map((note, index) => (
+                      <div key={`${activeWin32Preset.key}-note-${index}`} className="readiness-item ok"><span>{index + 1}</span><span>{note}</span></div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="info-card drawer-card" style={{ gridColumn: '1 / -1' }}>
+                  <div className="winget-review-grid">
+                    <div className="review-column">
+                      <div className="section-title">Silent install</div>
+                      <div className="detail-row stack"><div className="detail-value code">{activeWin32Preset.installCommand}</div></div>
+                      <div className="drawer-actions compact"><button className="btn btn-secondary" type="button" onClick={() => void onCopyValue(activeWin32Preset.installCommand)}>Copy</button></div>
+                    </div>
+                    <div className="review-column">
+                      <div className="section-title">Silent uninstall</div>
+                      <div className="detail-row stack"><div className="detail-value code">{activeWin32Preset.uninstallCommand}</div></div>
+                      <div className="drawer-actions compact"><button className="btn btn-secondary" type="button" onClick={() => void onCopyValue(activeWin32Preset.uninstallCommand)}>Copy</button></div>
+                    </div>
+                    <div className="review-column">
+                      <div className="section-title">Detect script</div>
+                      <div className="detail-row stack"><div className="detail-value code">{activeWin32Preset.detectScript}</div></div>
+                      <div className="drawer-actions compact"><button className="btn btn-secondary" type="button" onClick={() => void onCopyValue(activeWin32Preset.detectScript)}>Copy</button></div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ) : currentView === 'ocr' ? (
               <div className="ocr-assistant">
                 <div className="ocr-assistant-header">
                   <div>
@@ -1327,7 +1444,7 @@ ${result.note}` : result.message);
                 <table className="data-table">
                   <thead>
                     <tr>
-                      {visibleHeaders.map((header) => <th key={header}>{toLabel(header)}</th>)}
+                      {visibleHeaders.map((header) => <th key={header}>{getHeaderLabel(currentView, header)}</th>)}
                     </tr>
                   </thead>
                   <tbody>
@@ -1338,7 +1455,7 @@ ${result.note}` : result.message);
                         onClick={() => {
                           const actualIndex = rows.findIndex((candidate) => candidate === row);
                           setSelectedIndex(actualIndex >= 0 ? actualIndex : index);
-                          setDetailsSummary(toText(row['name'] ?? row['deviceName'] ?? row['displayName'] ?? row['appName'] ?? 'Row selected'));
+                          setDetailsSummary(currentView === 'apps' ? getAppDisplayLabel(row) : toText(row['name'] ?? row['deviceName'] ?? row['displayName'] ?? row['appName'] ?? 'Row selected'));
                           setDetailsText(toText(row['details'] ?? row));
                         }}
                         onDoubleClick={() => {
@@ -1346,7 +1463,7 @@ ${result.note}` : result.message);
                         }}
                         onContextMenu={(event) => onAppRowContextMenu(event, row)}
                       >
-                        {visibleHeaders.map((header) => <td key={`${String(row['id'] ?? index)}-${header}`}>{toText(row[header])}</td>)}
+                        {visibleHeaders.map((header) => <td key={`${String(row['id'] ?? index)}-${header}`}>{getCellDisplayValue(currentView, row, header)}</td>)}
                       </tr>
                     ))}
                   </tbody>
