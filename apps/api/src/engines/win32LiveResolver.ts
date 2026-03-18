@@ -1,262 +1,382 @@
+export type Win32SearchMode = 'quick' | 'deep';
+export type Win32SourceType = 'winget' | 'silentinstallhq' | 'vendor';
 
-export type Win32SourceType = 'winget' | 'silentinstallhq' | 'vendor' | 'fallback';
-
-export type Win32Alternative = {
-  title: string;
-  source: Win32SourceType;
-  url: string;
-  note: string;
+export type Win32ResolvedRecord = {
+  id: string;
+  name: string;
+  publisher: string;
+  packageId?: string;
+  sourceType: Win32SourceType;
+  sourceLabel: string;
+  sourceUrl: string;
+  sourceTitle: string;
+  confidence: 'high' | 'medium';
+  installCommand: string;
+  uninstallCommand: string;
+  detectionScript: string;
+  detectionSummary: string;
+  notes: string[];
+  evidence: string[];
 };
 
-export type Win32ResolvedPackage = {
-  ok: boolean;
+export type Win32SearchResponse = {
   query: string;
-  message: string;
+  mode: Win32SearchMode;
   bestMatch: {
+    id: string;
     name: string;
     publisher: string;
-    packageId: string;
+    packageId?: string;
     source: Win32SourceType;
-    sourceUrl?: string;
-    confidence: 'high' | 'medium' | 'low';
+    confidence: 'high' | 'medium';
     installCommand: string;
     uninstallCommand: string;
     detectScript: string;
+    whySelected: string;
     notes: string[];
     evidence: string[];
-    whySelected: string;
+    sourceUrl?: string;
   } | null;
-  alternatives: Win32Alternative[];
+  alternatives: Array<{
+    title: string;
+    source: 'winget' | 'silentinstallhq' | 'vendor';
+    url: string;
+    note: string;
+  }>;
   checkedSources: string[];
+  message: string;
 };
 
-function decodeHtml(text: string): string {
+type WingetSearchRow = {
+  packageIdentifier: string;
+  name: string;
+  publisher: string;
+  sourceUrl: string;
+};
+
+type SilentInstallRow = {
+  title: string;
+  url: string;
+  installCommand?: string;
+  uninstallCommand?: string;
+  notes: string[];
+  evidence: string[];
+};
+
+const USER_AGENT = 'ModernEndpoint/1.0';
+const DROP_WORDS = new Set(['installer', 'setup', 'silent', 'client', 'enterprise', 'workplace', 'vpn']);
+const SYNONYMS: Record<string, string[]> = {
+  chrome: ['google chrome', 'chrome enterprise'],
+  brave: ['brave browser'],
+  firefox: ['mozilla firefox'],
+  vscode: ['visual studio code', 'vs code'],
+  teams: ['microsoft teams'],
+  anyconnect: ['cisco anyconnect', 'cisco secure client', 'cisco secure mobility client'],
+  zoom: ['zoom workplace', 'zoom'],
+  acrobat: ['adobe acrobat reader', 'acrobat reader']
+};
+
+function normalize(text: string) {
+  return text.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+function slug(text: string) {
+  return normalize(text).replace(/\s+/g, '-') || 'app';
+}
+
+function titleCase(value: string) {
+  return value.replace(/\b\w/g, (m) => m.toUpperCase());
+}
+
+function htmlDecode(text: string) {
   return text
-    .replace(/&#8211;/g, '–')
-    .replace(/&#8217;/g, "'")
-    .replace(/&#038;/g, '&')
-    .replace(/&amp;/g, '&')
     .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'")
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&nbsp;/g, ' ');
 }
 
-function slugify(value: string): string {
-  return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+function stripTags(text: string) {
+  return htmlDecode(text.replace(/<[^>]+>/g, ' ')).replace(/\s+/g, ' ').trim();
 }
 
-function normalizeQuery(query: string): string {
-  return query.replace(/\s+/g, ' ').trim();
+function tokenize(text: string) {
+  return normalize(text)
+    .split(/\s+/)
+    .filter(Boolean)
+    .filter((token) => !DROP_WORDS.has(token));
 }
 
-function buildDetectScript(name: string, exeHint: string): string {
-  const safeName = name.replace(/"/g, '\"');
-  const safeExe = exeHint.replace(/"/g, '\"');
-  return `$displayName = "${safeName}"
-` + `$exeCandidates = @(
-` + `  "C:\\Program Files\\${safeExe}\",
-` + `  "C:\\Program Files (x86)\\${safeExe}\"
-)
+function expandQueries(query: string, mode: Win32SearchMode) {
+  const trimmed = query.trim();
+  const values = new Set<string>([trimmed]);
+  const normalized = normalize(trimmed);
+  const tokens = tokenize(trimmed);
 
-` + `foreach ($candidate in $exeCandidates) {
-` + `  if (Test-Path $candidate) {
-` + `    Write-Output "Detected"
-` + `    exit 0
-` + `  }
-` + `}
+  for (const token of tokens) {
+    for (const synonym of SYNONYMS[token] ?? []) values.add(synonym);
+  }
 
-` + `$registryHit = Get-ChildItem "HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall",
-` + `                            "HKLM:\\Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall" -ErrorAction SilentlyContinue |
-` + `  Get-ItemProperty |
-` + `  Where-Object { $_.DisplayName -like "*${safeName}*" }
+  if (SYNONYMS[normalized]) {
+    for (const synonym of SYNONYMS[normalized]) values.add(synonym);
+  }
 
-` + `if ($registryHit) {
-  Write-Output "Detected"
-  exit 0
-}
+  if (tokens.length > 1) {
+    values.add(titleCase(tokens.join(' ')));
+    values.add(tokens.join(' '));
+  }
 
-exit 1`;
-}
-
-async function fetchText(url: string): Promise<string> {
-  const response = await fetch(url, {
-    headers: {
-      'user-agent': 'Mozilla/5.0 Win32 Utility Resolver',
-      'accept-language': 'en-US,en;q=0.9'
+  if (mode === 'deep') {
+    for (const value of [...values]) {
+      values.add(`${value} silent install`);
+      values.add(`${value} install uninstall`);
     }
+  }
+
+  return [...values].filter(Boolean);
+}
+
+async function fetchText(url: string) {
+  const response = await fetch(url, {
+    headers: { 'User-Agent': USER_AGENT },
+    signal: AbortSignal.timeout(12000)
   });
-  if (!response.ok) throw new Error(`Request failed: ${response.status}`);
+  if (!response.ok) throw new Error(`Fetch failed for ${url} (${response.status}).`);
   return await response.text();
 }
 
-async function searchWinget(query: string) {
-  const url = `https://winget.run/search?query=${encodeURIComponent(query)}`;
-  try {
-    const html = await fetchText(url);
-    const matches = [...html.matchAll(/href="\/pkg\/([^"]+)"[^>]*>(.*?)<\/a>/gi)]
-      .slice(0, 5)
-      .map((m) => {
-        const path = m[1];
-        const label = decodeHtml(m[2]);
-        const parts = path.split('/');
-        const publisher = parts.at(-2) ?? 'Unknown';
-        const pkg = parts.at(-1) ?? label;
-        return {
-          name: label || pkg,
-          publisher,
-          packageId: `${publisher}.${pkg}`,
-          url: `https://winget.run/pkg/${path}`,
-          installCommand: `winget install --id ${publisher}.${pkg} --exact --silent --accept-source-agreements --accept-package-agreements`,
-          uninstallCommand: `winget uninstall --id ${publisher}.${pkg} --exact --silent`,
-          note: 'Resolved from WinGet package directory.'
-        };
+async function searchWingetCatalog(query: string): Promise<WingetSearchRow[]> {
+  const html = await fetchText(`https://winget.run/search?query=${encodeURIComponent(query)}`);
+  const matches = html.matchAll(/\/pkg\/([^"'?#<\s]+)\/([^"'?#<\s]+)/g);
+  const seen = new Set<string>();
+  const rows: WingetSearchRow[] = [];
+
+  for (const match of matches) {
+    const publisher = decodeURIComponent(match[1] ?? '').trim();
+    const name = decodeURIComponent(match[2] ?? '').trim();
+    if (!publisher || !name) continue;
+    const packageIdentifier = `${publisher}.${name}`;
+    if (seen.has(packageIdentifier)) continue;
+    seen.add(packageIdentifier);
+    rows.push({
+      packageIdentifier,
+      name: name.replace(/[-_.]+/g, ' '),
+      publisher,
+      sourceUrl: `https://winget.run/pkg/${publisher}/${name}`
+    });
+    if (rows.length >= 10) break;
+  }
+
+  return rows;
+}
+
+function extractCommandsFromHtml(html: string) {
+  const blocks = [
+    ...html.matchAll(/<pre[^>]*>([\s\S]*?)<\/pre>/gi),
+    ...html.matchAll(/<code[^>]*>([\s\S]*?)<\/code>/gi)
+  ].map((match) => stripTags(match[1] ?? ''));
+
+  const candidates = blocks
+    .map((line) => line.split(/\r?\n/).map((item) => item.trim()).filter(Boolean))
+    .flat()
+    .filter((line) => /(msiexec|setup\.exe|\.exe\s|\.msi|\/quiet|\/qn|\/S|\/silent|\/verysilent|uninstall|winget install|winget uninstall)/i.test(line));
+
+  const installCommand = candidates.find((line) => !/uninstall/i.test(line) && /(msiexec|winget install|\/quiet|\/qn|\/s|\/silent|\/verysilent)/i.test(line));
+  const uninstallCommand = candidates.find((line) => /uninstall|msiexec\s+\/x|winget uninstall/i.test(line));
+  return { installCommand: installCommand?.trim(), uninstallCommand: uninstallCommand?.trim(), evidence: candidates.slice(0, 8) };
+}
+
+async function searchSilentInstallHq(query: string): Promise<SilentInstallRow[]> {
+  const html = await fetchText(`https://silentinstallhq.com/?s=${encodeURIComponent(query)}`);
+  const urls = [...html.matchAll(/href=["'](https:\/\/silentinstallhq\.com\/[^"'#]+)["']/gi)]
+    .map((match) => match[1])
+    .filter((url): url is string => Boolean(url) && !url.includes('/?s='));
+  const uniqueUrls = [...new Set(urls)].slice(0, 5);
+  const rows: SilentInstallRow[] = [];
+
+  for (const url of uniqueUrls) {
+    try {
+      const articleHtml = await fetchText(url);
+      const titleMatch = articleHtml.match(/<title>([\s\S]*?)<\/title>/i);
+      const title = stripTags(titleMatch?.[1] ?? url);
+      const commands = extractCommandsFromHtml(articleHtml);
+      if (!commands.installCommand && !commands.uninstallCommand) continue;
+      rows.push({
+        title,
+        url,
+        installCommand: commands.installCommand,
+        uninstallCommand: commands.uninstallCommand,
+        notes: ['Commands captured from Silent Install HQ. Validate against your exact installer media before production use.'],
+        evidence: commands.evidence
       });
-    return matches;
-  } catch {
-    return [] as Array<{name:string;publisher:string;packageId:string;url:string;installCommand:string;uninstallCommand:string;note:string}>;
+    } catch {
+      // ignore item
+    }
   }
+
+  return rows;
 }
 
-async function searchSilentInstallHq(query: string) {
-  const url = `https://silentinstallhq.com/?s=${encodeURIComponent(query)}`;
-  try {
-    const html = await fetchText(url);
-    const matches = [...html.matchAll(/<a[^>]+href="(https:\/\/silentinstallhq\.com\/[^"]+)"[^>]*>(.*?)<\/a>/gi)]
-      .map((m) => ({ url: m[1], title: decodeHtml(m[2]) }))
-      .filter((item) => item.title && /install|uninstall|silent/i.test(item.title))
-      .filter((item, index, arr) => arr.findIndex((x) => x.url === item.url) == index)
-      .slice(0, 5);
-    return matches;
-  } catch {
-    return [] as Array<{url:string;title:string}>;
+function buildDetectScript(appName: string) {
+  const escapedName = appName.replace(/'/g, "''");
+  return `$appName = '${escapedName}'\n$registryPaths = @(\n  'HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*',\n  'HKLM:\\Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*'\n)\n$found = Get-ItemProperty -Path $registryPaths -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -like \"*$appName*\" }\nif ($found) {\n  Write-Output \"Detected via registry\"\n  exit 0\n}\nexit 1`;
+}
+
+function scoreResult(query: string, candidateName: string, publisher: string, sourceType: Win32SourceType, hasBothCommands: boolean) {
+  const qTokens = tokenize(query);
+  const cTokens = tokenize(candidateName);
+  let score = 0;
+  for (const token of qTokens) {
+    if (cTokens.includes(token)) score += 30;
+    if (normalize(publisher).includes(token)) score += 10;
   }
+  if (normalize(candidateName) === normalize(query)) score += 80;
+  if (sourceType === 'winget') score += 20;
+  if (hasBothCommands) score += 25;
+  return score;
 }
 
-function createFallback(query: string): Win32ResolvedPackage {
-  const exeHint = `${query.replace(/[^a-zA-Z0-9+.-]+/g, '')}.exe`;
-  return {
-    ok: false,
-    query,
-    message: 'No reliable source-backed packaging record was found. Try Deep Search or a simpler product name.',
-    bestMatch: null,
-    alternatives: [
-      {
-        title: 'Search WinGet manually',
-        source: 'winget',
-        url: `https://winget.run/search?query=${encodeURIComponent(query)}`,
-        note: 'Review whether the package exists in WinGet.'
-      },
-      {
-        title: 'Search Silent Install HQ',
-        source: 'silentinstallhq',
-        url: `https://silentinstallhq.com/?s=${encodeURIComponent(query)}`,
-        note: 'Review community packaging guidance.'
-      },
-      {
-        title: 'Search vendor documentation',
-        source: 'vendor',
-        url: `https://www.google.com/search?q=${encodeURIComponent(query + ' silent install vendor')}`,
-        note: 'Open vendor deployment documentation in a new tab.'
-      }
-    ],
-    checkedSources: ['WinGet', 'Silent Install HQ', 'Vendor search'],
-  };
-}
-
-export async function resolveWin32Package(queryInput: string): Promise<Win32ResolvedPackage> {
-  const query = normalizeQuery(queryInput);
-  if (!query) {
+export async function resolveWin32Search(query: string, mode: Win32SearchMode): Promise<Win32SearchResponse> {
+  const trimmed = query.trim();
+  if (!trimmed) {
     return {
-      ok: false,
       query: '',
-      message: 'Enter an application name to search across packaging sources.',
+      mode,
       bestMatch: null,
       alternatives: [],
-      checkedSources: []
+      checkedSources: [],
+      message: 'Enter an application name to resolve packaging commands.'
     };
   }
 
-  const [wingetMatches, hqMatches] = await Promise.all([
-    searchWinget(query),
-    searchSilentInstallHq(query)
-  ]);
+  const queries = expandQueries(trimmed, mode);
+  const checkedSources: string[] = [];
+  const candidates: Array<Win32ResolvedRecord & { score: number }> = [];
+  const altMap = new Map<string, { title: string; source: 'winget' | 'silentinstallhq' | 'vendor'; url: string; note: string }>();
 
-  if (wingetMatches.length > 0) {
-    const best = wingetMatches[0];
-    return {
-      ok: true,
-      query,
-      message: `Resolved ${best.name} from WinGet. Sources checked: WinGet, Silent Install HQ, vendor search.`,
-      bestMatch: {
-        name: best.name,
-        publisher: best.publisher,
-        packageId: best.packageId,
-        source: 'winget',
-        sourceUrl: best.url,
-        confidence: 'high',
-        installCommand: best.installCommand,
-        uninstallCommand: best.uninstallCommand,
-        detectScript: buildDetectScript(best.name, `${slugify(best.name)}.exe`),
-        notes: [
-          'Install and uninstall commands are source-backed from WinGet search results.',
-          'Detection script is generated from standard file and registry evidence for Intune.'
-        ],
-        evidence: [best.note],
-        whySelected: 'Exact or high-quality package match found in WinGet.'
-      },
-      alternatives: [
-        ...wingetMatches.slice(1, 4).map((item) => ({
-          title: `${item.name} • ${item.publisher}`,
-          source: 'winget' as const,
-          url: item.url,
-          note: 'Alternative WinGet package candidate.'
-        })),
-        ...hqMatches.slice(0, 2).map((item) => ({
-          title: item.title,
-          source: 'silentinstallhq' as const,
-          url: item.url,
-          note: 'Supplemental packaging guidance from community source.'
-        }))
-      ],
-      checkedSources: ['WinGet', 'Silent Install HQ', 'Vendor search']
-    };
+  try {
+    checkedSources.push('WinGet');
+    for (const q of queries) {
+      const rows = await searchWingetCatalog(q);
+      for (const row of rows) {
+        if (candidates.some((item) => item.packageId === row.packageIdentifier)) continue;
+        candidates.push({
+          id: `winget-${slug(row.packageIdentifier)}`,
+          name: row.name,
+          publisher: row.publisher,
+          packageId: row.packageIdentifier,
+          sourceType: 'winget',
+          sourceLabel: 'WinGet',
+          sourceUrl: row.sourceUrl,
+          sourceTitle: row.packageIdentifier,
+          confidence: 'high',
+          installCommand: `winget install --id ${row.packageIdentifier} --exact --silent --accept-source-agreements --accept-package-agreements`,
+          uninstallCommand: `winget uninstall --id ${row.packageIdentifier} --exact --silent`,
+          detectionScript: buildDetectScript(row.name),
+          detectionSummary: 'Generated detection script based on app name and standard registry uninstall locations.',
+          notes: [
+            'Install and uninstall commands are source-backed by the WinGet package identifier.',
+            'Validate generated detection logic in a packaging VM before production rollout.'
+          ],
+          evidence: [row.packageIdentifier, row.sourceUrl],
+          score: scoreResult(trimmed, row.name, row.publisher, 'winget', true)
+        });
+        altMap.set(`winget:${row.packageIdentifier}`, {
+          title: `${row.name} (${row.publisher})`,
+          source: 'winget',
+          url: row.sourceUrl,
+          note: `WinGet package: ${row.packageIdentifier}`
+        });
+      }
+    }
+  } catch {
+    // ignore
   }
 
-  if (hqMatches.length > 0) {
-    const best = hqMatches[0];
-    const querySlug = slugify(query);
-    return {
-      ok: true,
-      query,
-      message: `Found community packaging guidance for ${query} outside WinGet.`,
-      bestMatch: {
-        name: query,
-        publisher: 'Needs validation',
-        packageId: `custom.${querySlug}`,
-        source: 'silentinstallhq',
-        sourceUrl: best.url,
-        confidence: 'medium',
-        installCommand: `Review source page and confirm vendor-supported silent install for ${query}`,
-        uninstallCommand: `Review source page and confirm vendor uninstall string or MSI product code for ${query}`,
-        detectScript: buildDetectScript(query, `${querySlug}.exe`),
-        notes: [
-          'Primary packaging guidance was found in a community source, not WinGet.',
-          'Validate the final install and uninstall commands against the linked source page before production rollout.'
-        ],
-        evidence: [best.title],
-        whySelected: 'WinGet did not return a strong result, but a community packaging article matched the query.'
-      },
-      alternatives: hqMatches.slice(1, 5).map((item) => ({
-        title: item.title,
-        source: 'silentinstallhq' as const,
-        url: item.url,
-        note: 'Alternative community packaging article.'
-      })),
-      checkedSources: ['WinGet', 'Silent Install HQ', 'Vendor search']
-    };
+  try {
+    checkedSources.push('Silent Install HQ');
+    for (const q of queries) {
+      const rows = await searchSilentInstallHq(q);
+      for (const row of rows) {
+        const cleanTitle = row.title.replace(/\s*[-|].*$/, '').trim();
+        const inferredName = cleanTitle.replace(/silent install.*$/i, '').replace(/how to guide.*$/i, '').trim() || trimmed;
+        const hasBothCommands = Boolean(row.installCommand && row.uninstallCommand);
+        if (!row.installCommand && !row.uninstallCommand) continue;
+        if (candidates.some((item) => item.sourceUrl === row.url)) continue;
+        candidates.push({
+          id: `sihq-${slug(row.url)}`,
+          name: inferredName,
+          publisher: 'Community source',
+          sourceType: 'silentinstallhq',
+          sourceLabel: 'Silent Install HQ',
+          sourceUrl: row.url,
+          sourceTitle: row.title,
+          confidence: hasBothCommands ? 'medium' : 'medium',
+          installCommand: row.installCommand ?? '',
+          uninstallCommand: row.uninstallCommand ?? '',
+          detectionScript: buildDetectScript(inferredName),
+          detectionSummary: 'Detection script generated from source-backed app title and common uninstall registry locations.',
+          notes: row.notes,
+          evidence: row.evidence,
+          score: scoreResult(trimmed, inferredName, 'Community source', 'silentinstallhq', hasBothCommands)
+        });
+        altMap.set(`sihq:${row.url}`, {
+          title: row.title,
+          source: 'silentinstallhq',
+          url: row.url,
+          note: hasBothCommands ? 'Community article with install and uninstall commands.' : 'Community article with partial packaging guidance.'
+        });
+      }
+    }
+  } catch {
+    // ignore
   }
 
-  return createFallback(query);
+  checkedSources.push('Vendor search');
+  const vendorQueries = queries.slice(0, mode === 'deep' ? 4 : 2);
+  for (const vendorQuery of vendorQueries) {
+    const vendorUrl = `https://www.google.com/search?q=${encodeURIComponent(vendorQuery + ' silent install uninstall vendor')}`;
+    altMap.set(`vendor:${vendorQuery}`, {
+      title: `${vendorQuery} vendor search`,
+      source: 'vendor',
+      url: vendorUrl,
+      note: 'Use this when WinGet and community sources do not return a reliable source-backed package.'
+    });
+  }
+
+  candidates.sort((a, b) => b.score - a.score);
+  const sourceBacked = candidates.filter((item) => Boolean(item.installCommand));
+  const best = sourceBacked[0] ?? null;
+  const alternatives = [...altMap.values()]
+    .filter((item) => !best || item.url !== best.sourceUrl)
+    .slice(0, mode === 'deep' ? 6 : 3);
+
+  return {
+    query: trimmed,
+    mode,
+    bestMatch: best
+      ? {
+          id: best.id,
+          name: best.name,
+          publisher: best.publisher,
+          packageId: best.packageId,
+          source: best.sourceType,
+          confidence: best.confidence,
+          installCommand: best.installCommand,
+          uninstallCommand: best.uninstallCommand,
+          detectScript: best.detectionScript,
+          whySelected: `Best source-backed match from ${best.sourceLabel}.`,
+          notes: best.notes,
+          evidence: best.evidence,
+          sourceUrl: best.sourceUrl
+        }
+      : null,
+    alternatives,
+    checkedSources,
+    message: best
+      ? `Resolved ${best.name} from ${best.sourceLabel}.`
+      : 'No reliable source-backed package was found for this query. Review alternatives or switch to Deep Search for broader coverage.'
+  };
 }

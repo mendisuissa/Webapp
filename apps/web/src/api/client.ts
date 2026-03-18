@@ -220,6 +220,7 @@ export interface Win32PackageBundleRequest {
   detectionType?: string;
   detectionSummary?: string;
   source?: string;
+  sourceUrl?: string;
   confidence?: string | number;
   notes?: string[];
 }
@@ -314,8 +315,8 @@ export interface Win32ResolveResponse {
   checkedSources: string[];
 }
 
-export async function resolveWin32Package(query: string) {
-  const response = await api.get('/win32/resolve', { params: { q: query } });
+export async function resolveWin32Package(query: string, mode: 'quick' | 'deep' = 'quick') {
+  const response = await api.get('/win32/search', { params: { q: query, mode } });
   return response.data as Win32ResolveResponse;
 }
 

@@ -1,6 +1,3 @@
-Replace these files:
-- apps/api/src/routes/api.ts
-- apps/api/src/engines/win32Zip.ts
+Replace apps/api/src/engines/win32LiveResolver.ts
 
-Then run:
-npm run build
+Fix: bestMatch.source now uses Win32SourceType so vendor results compile correctly.

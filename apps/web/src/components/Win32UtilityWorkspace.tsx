@@ -1,10 +1,5 @@
 import { useMemo, useState } from 'react';
-import {
-  downloadWin32PackageBundle,
-  resolveWin32Package,
-  type Win32AlternativeRecord,
-  type Win32ResolveResponse
-} from '../api/client.js';
+import { resolveWin32Package, type Win32AlternativeRecord, type Win32ResolveResponse } from '../api/client.js';
 
 type Mode = 'quick' | 'deep';
 
@@ -81,8 +76,6 @@ export default function Win32UtilityWorkspace() {
   const [query, setQuery] = useState('Google Chrome');
   const [mode, setMode] = useState<Mode>('quick');
   const [loading, setLoading] = useState(false);
-  const [downloading, setDownloading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<Win32ResolveResponse | null>(null);
 
   const best = result?.bestMatch ?? null;
@@ -94,40 +87,11 @@ export default function Win32UtilityWorkspace() {
     const trimmed = query.trim();
     if (!trimmed) return;
     setLoading(true);
-    setError(null);
     try {
-      const payload = await resolveWin32Package(trimmed);
+      const payload = await resolveWin32Package(trimmed, mode);
       setResult(payload);
-    } catch (resolveError) {
-      setResult(null);
-      setError(resolveError instanceof Error ? resolveError.message : 'Failed to resolve package.');
     } finally {
       setLoading(false);
-    }
-  }
-
-  async function handleDownloadBundle() {
-    if (!best?.name || !best.installCommand) {
-      setError('Resolve a package with a valid install command before downloading the bundle.');
-      return;
-    }
-
-    setDownloading(true);
-    setError(null);
-    try {
-      await downloadWin32PackageBundle({
-        appName: best.name,
-        publisher: best.publisher,
-        installCommand: best.installCommand,
-        uninstallCommand: best.uninstallCommand,
-        detectScript: best.detectScript,
-        source: sourceLabel[best.source] ?? best.source,
-        notes: best.notes ?? []
-      });
-    } catch (downloadError) {
-      setError(downloadError instanceof Error ? downloadError.message : 'Failed to download package folder.');
-    } finally {
-      setDownloading(false);
     }
   }
 
@@ -159,11 +123,8 @@ export default function Win32UtilityWorkspace() {
             <button className="btn btn-primary" type="button" onClick={() => void runResolve()} disabled={loading || !query.trim()}>
               {loading ? 'Searching…' : 'Resolve package'}
             </button>
-            <button className="btn btn-secondary" type="button" onClick={handleDownloadBundle} disabled={!hasResult || downloading}>
-              {downloading ? 'Preparing…' : 'Download package folder'}
-            </button>
             <button className="btn btn-secondary" type="button" onClick={() => result && downloadNotes(result)} disabled={!hasResult}>
-              Export notes
+              Export package notes
             </button>
           </div>
         </div>
@@ -177,8 +138,6 @@ export default function Win32UtilityWorkspace() {
           ))}
         </div>
       </div>
-
-      {error ? <Notice tone="warn">{error}</Notice> : null}
 
       {loading ? (
         <Notice tone="info">Looking across packaging sources and ranking the best match for <strong>{query}</strong>.</Notice>
@@ -196,7 +155,7 @@ export default function Win32UtilityWorkspace() {
             </div>
           </div>
           <div className="win32-alt-grid">
-            {result.alternatives.map((item: Win32AlternativeRecord) => <AlternativeCard key={item.url} item={item} />)}
+            {(result?.alternatives ?? []).map((item: Win32AlternativeRecord) => <AlternativeCard key={item.url} item={item} />)}
           </div>
         </div>
       ) : null}
@@ -270,7 +229,7 @@ export default function Win32UtilityWorkspace() {
               <div className="section-title">Alternative matches</div>
               {result?.alternatives?.length ? (
                 <div className="win32-alt-grid compact">
-                  {result.alternatives.map((item: Win32AlternativeRecord) => <AlternativeCard key={item.url} item={item} />)}
+                  {(result?.alternatives ?? []).map((item: Win32AlternativeRecord) => <AlternativeCard key={item.url} item={item} />)}
                 </div>
               ) : (
                 <div className="summary-text">No additional alternatives were returned for this query.</div>
