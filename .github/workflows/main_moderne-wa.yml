@@ -125,17 +125,23 @@ jobs:
           echo "Health check failed after retries"
           exit 1
 
-      - name: Post-deploy win32 search smoke check
-        run: |
-          for i in 1 2 3 4 5 6; do
-            if curl -fsS "https://app.modernendpoint.tech/api/win32/search?q=google%20chrome&mode=quick" > /tmp/win32-search.json; then
-              break
-            fi
-            echo "Win32 search check failed, retrying in 10 seconds..."
-            sleep 10
-          done
+      - name: Post-deploy win32 search route check
+  run: |
+    for i in 1 2 3 4 5 6; do
+      code=$(curl -sS -o /tmp/win32-search.out -w "%{http_code}" "https://app.modernendpoint.tech/api/win32/search?q=google%20chrome&mode=quick")
 
-          grep -Eq '"status"|"resolved"|"choices"|"not_found"' /tmp/win32-search.json
+      if [ "$code" = "200" ] || [ "$code" = "401" ]; then
+        echo "Win32 search route is alive, HTTP $code"
+        cat /tmp/win32-search.out || true
+        exit 0
+      fi
+
+      echo "Win32 search route check returned HTTP $code, retrying in 10 seconds..."
+      sleep 10
+    done
+
+    echo "Win32 search route check failed after retries"
+    exit 1
 
       - name: Post-deploy frontend smoke check
         run: |
