@@ -1,5 +1,10 @@
 import { useMemo, useState } from 'react';
-import { resolveWin32Package, type Win32AlternativeRecord, type Win32ResolveResponse } from '../api/client.js';
+import {
+  downloadWin32PackageBundle,
+  resolveWin32Package,
+  type Win32AlternativeRecord,
+  type Win32ResolveResponse
+} from '../api/client.js';
 
 type Mode = 'quick' | 'deep';
 
@@ -15,6 +20,18 @@ const sourceLabel: Record<string, string> = {
 function copyToClipboard(value: string) {
   if (typeof navigator === 'undefined' || !navigator.clipboard) return;
   void navigator.clipboard.writeText(value);
+}
+
+function triggerBlobDownload(blob: Blob, filename: string) {
+  if (typeof window === 'undefined' || typeof document === 'undefined') return;
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
 }
 
 function downloadNotes(payload: Win32ResolveResponse) {
@@ -47,12 +64,7 @@ function downloadNotes(payload: Win32ResolveResponse) {
     ...m.notes.map((item: string) => `- ${item}`)
   ].join('\n');
   const blob = new Blob([text], { type: 'text/markdown;charset=utf-8' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `${m.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-win32-notes.md`;
-  a.click();
-  URL.revokeObjectURL(url);
+  triggerBlobDownload(blob, `${m.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-win32-notes.md`);
 }
 
 function Notice({ tone, children }: { tone: NoticeTone; children: React.ReactNode }) {
@@ -72,14 +84,26 @@ function AlternativeCard({ item }: { item: Win32AlternativeRecord }) {
   );
 }
 
+function hasSourceBackedInstall(result: Win32ResolveResponse | null): boolean {
+  const best = result?.bestMatch;
+  if (!best) return false;
+  const source = String(best.source || '').toLowerCase();
+  const install = String(best.installCommand || '').trim();
+  if (!install) return false;
+  if (source === 'fallback' || source === 'template') return false;
+  return true;
+}
+
 export default function Win32UtilityWorkspace() {
   const [query, setQuery] = useState('Google Chrome');
   const [mode, setMode] = useState<Mode>('quick');
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<Win32ResolveResponse | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   const best = result?.bestMatch ?? null;
   const hasResult = !!best;
+  const canDownloadBundle = hasSourceBackedInstall(result);
 
   const checkedSources = useMemo(() => result?.checkedSources ?? ['WinGet', 'Silent Install HQ', 'Vendor search'], [result]);
 
@@ -87,11 +111,51 @@ export default function Win32UtilityWorkspace() {
     const trimmed = query.trim();
     if (!trimmed) return;
     setLoading(true);
+    setError(null);
     try {
       const payload = await resolveWin32Package(trimmed, mode);
       setResult(payload);
+    } catch (err) {
+      setResult(null);
+      setError(err instanceof Error ? err.message : 'Failed to resolve package.');
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function handleDownloadBundle() {
+    const current = result?.bestMatch;
+    if (!current) {
+      setError('Resolve a package before downloading the package folder.');
+      return;
+    }
+
+    const source = String(current.source || '').toLowerCase();
+    const installCommand = String(current.installCommand || '').trim();
+    if (!installCommand || source === 'fallback' || source === 'template') {
+      setError('Resolve a source-backed package before downloading the package folder.');
+      return;
+    }
+
+    try {
+      setError(null);
+      const blob = await downloadWin32PackageBundle({
+        appName: current.name,
+        publisher: current.publisher,
+        packageId: current.packageId,
+        installCommand: current.installCommand,
+        uninstallCommand: current.uninstallCommand,
+        detectScript: current.detectScript,
+        source: current.source,
+        sourceUrl: current.sourceUrl,
+        confidence: current.confidence,
+        notes: current.notes ?? []
+      });
+
+      const safeName = (current.name || 'win32-package').replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase();
+      triggerBlobDownload(blob, `${safeName}-intune-package.zip`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to build package bundle.');
     }
   }
 
@@ -123,6 +187,9 @@ export default function Win32UtilityWorkspace() {
             <button className="btn btn-primary" type="button" onClick={() => void runResolve()} disabled={loading || !query.trim()}>
               {loading ? 'Searching…' : 'Resolve package'}
             </button>
+            <button className="btn btn-secondary" type="button" onClick={() => void handleDownloadBundle()} disabled={!canDownloadBundle}>
+              Download package folder
+            </button>
             <button className="btn btn-secondary" type="button" onClick={() => result && downloadNotes(result)} disabled={!hasResult}>
               Export package notes
             </button>
@@ -139,6 +206,7 @@ export default function Win32UtilityWorkspace() {
         </div>
       </div>
 
+      {error ? <Notice tone="warn">{error}</Notice> : null}
       {loading ? (
         <Notice tone="info">Looking across packaging sources and ranking the best match for <strong>{query}</strong>.</Notice>
       ) : null}
@@ -155,7 +223,7 @@ export default function Win32UtilityWorkspace() {
             </div>
           </div>
           <div className="win32-alt-grid">
-            {(result?.alternatives ?? []).map((item: Win32AlternativeRecord) => <AlternativeCard key={item.url} item={item} />)}
+            {(result.alternatives ?? []).map((item: Win32AlternativeRecord) => <AlternativeCard key={item.url} item={item} />)}
           </div>
         </div>
       ) : null}
@@ -222,12 +290,12 @@ export default function Win32UtilityWorkspace() {
             <Notice tone={best.source === 'winget' ? 'success' : 'warn'}>
               {best.source === 'winget'
                 ? 'This result is source-backed from WinGet. Detection is generated, so validate before production rollout.'
-                : 'This result came from a community or fallback path. Validate commands against the linked source before production rollout.'}
+                : 'This result came from a community or vendor path. Validate commands against the linked source before production rollout.'}
             </Notice>
 
             <div className="info-card drawer-card">
               <div className="section-title">Alternative matches</div>
-              {result?.alternatives?.length ? (
+              {(result?.alternatives ?? []).length ? (
                 <div className="win32-alt-grid compact">
                   {(result?.alternatives ?? []).map((item: Win32AlternativeRecord) => <AlternativeCard key={item.url} item={item} />)}
                 </div>
