@@ -82,7 +82,7 @@ type SilentInstallRow = {
 };
 
 const USER_AGENT = 'ModernEndpoint/1.0';
-const DROP_WORDS = new Set(['installer', 'setup', 'silent', 'client', 'enterprise', 'workplace', 'vpn', 'edition']);
+const DROP_WORDS = new Set(['installer', 'setup', 'silent', 'client', 'enterprise', 'workplace', 'vpn', 'edition', 'desktop', 'app']);
 const SYNONYMS: Record<string, string[]> = {
   chrome: ['google chrome', 'chrome enterprise', 'chrome canary'],
   brave: ['brave browser'],
@@ -101,6 +101,35 @@ function normalize(text: string) {
 
 function slug(text: string) {
   return normalize(text).replace(/\s+/g, '-') || 'app';
+}
+
+
+function uniqueTokens(values: string[]) {
+  return [...new Set(values.filter(Boolean))];
+}
+
+function buildQuerySignals(query: string) {
+  const normalizedQuery = normalize(query);
+  const tokens = uniqueTokens(tokenize(query));
+  const joined = tokens.join(' ');
+  return { normalizedQuery, tokens, joined };
+}
+
+function isRelevantCandidate(query: string, candidateName: string, publisher: string, packageId?: string) {
+  const { normalizedQuery, tokens } = buildQuerySignals(query);
+  const haystack = [candidateName, publisher, packageId ?? ''].map(normalize).join(' ');
+  if (!haystack.trim()) return false;
+  if (haystack.includes(normalizedQuery)) return true;
+  const matchedTokens = tokens.filter((token) => haystack.includes(token));
+  if (tokens.length <= 1) return matchedTokens.length >= 1;
+  const minimumMatches = Math.max(2, Math.ceil(tokens.length * 0.6));
+  return matchedTokens.length >= minimumMatches;
+}
+
+function inferConfidence(score: number, candidateName: string, query: string, hasBothCommands: boolean): 'high' | 'medium' | 'low' {
+  if (normalize(candidateName) == normalize(query) || score >= 170) return 'high';
+  if (hasBothCommands || score >= 110) return 'medium';
+  return 'low';
 }
 
 function htmlDecode(text: string) {
@@ -236,17 +265,30 @@ function buildDetectScript(appName: string) {
   return `$appName = '${escapedName}'\n$registryPaths = @(\n  'HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*',\n  'HKLM:\\Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*'\n)\n$found = Get-ItemProperty -Path $registryPaths -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -like \"*$appName*\" }\nif ($found) {\n  Write-Output \"Detected via registry\"\n  exit 0\n}\nexit 1`;
 }
 
-function scoreResult(query: string, candidateName: string, publisher: string, sourceType: Win32SourceType, hasBothCommands: boolean) {
-  const qTokens = tokenize(query);
-  const cTokens = tokenize(candidateName);
+function scoreResult(query: string, candidateName: string, publisher: string, sourceType: Win32SourceType, hasBothCommands: boolean, packageId?: string) {
+  const { normalizedQuery, tokens } = buildQuerySignals(query);
+  const normalizedName = normalize(candidateName);
+  const normalizedPublisher = normalize(publisher);
+  const normalizedPackageId = normalize(packageId ?? '');
+  const cTokens = uniqueTokens(tokenize(candidateName));
   let score = 0;
-  for (const token of qTokens) {
-    if (cTokens.includes(token)) score += 30;
-    if (normalize(publisher).includes(token)) score += 10;
+
+  if (normalizedName === normalizedQuery) score += 160;
+  else if (normalizedName.includes(normalizedQuery)) score += 110;
+
+  if (normalizedPackageId && normalizedPackageId.includes(normalizedQuery)) score += 120;
+
+  for (const token of tokens) {
+    if (cTokens.includes(token)) score += 34;
+    else if (normalizedName.includes(token)) score += 22;
+    if (normalizedPublisher.includes(token)) score += 8;
+    if (normalizedPackageId.includes(token)) score += 18;
   }
-  if (normalize(candidateName) === normalize(query)) score += 80;
-  if (sourceType === 'winget') score += 20;
-  if (hasBothCommands) score += 25;
+
+  if (sourceType === 'winget') score += 24;
+  if (sourceType === 'silentinstallhq') score += 8;
+  if (hasBothCommands) score += 28;
+  if (tokens.length > 1 && tokens.every((token) => normalizedName.includes(token) || normalizedPackageId.includes(token))) score += 30;
   return score;
 }
 
@@ -295,6 +337,7 @@ export async function resolveWin32Search(query: string, mode: Win32SearchMode): 
       for (const row of rows) {
         if (candidates.some((item) => item.packageId === row.packageIdentifier)) continue;
         const name = row.name.replace(/\b\w/g, (m) => m.toUpperCase());
+        const wingetScore = scoreResult(trimmed, name, row.publisher, 'winget', true, row.packageIdentifier);
         candidates.push({
           id: `winget-${slug(row.packageIdentifier)}`,
           name,
@@ -304,7 +347,7 @@ export async function resolveWin32Search(query: string, mode: Win32SearchMode): 
           sourceLabel: 'WinGet',
           sourceUrl: row.sourceUrl,
           sourceTitle: row.packageIdentifier,
-          confidence: 'high',
+          confidence: inferConfidence(wingetScore, name, trimmed, true),
           installCommand: `winget install --id ${row.packageIdentifier} --exact --silent --accept-source-agreements --accept-package-agreements`,
           uninstallCommand: `winget uninstall --id ${row.packageIdentifier} --exact --silent`,
           detectionScript: buildDetectScript(name),
@@ -315,7 +358,7 @@ export async function resolveWin32Search(query: string, mode: Win32SearchMode): 
           ],
           evidence: [row.packageIdentifier, row.sourceUrl],
           whySelected: `Best source-backed match from WinGet for ${trimmed}.`,
-          score: scoreResult(trimmed, name, row.publisher, 'winget', true)
+          score: wingetScore
         });
         altMap.set(`winget:${row.packageIdentifier}`, {
           title: `${name} (${row.publisher})`,
@@ -339,6 +382,7 @@ export async function resolveWin32Search(query: string, mode: Win32SearchMode): 
         if (!row.installCommand && !row.uninstallCommand) continue;
         if (candidates.some((item) => item.sourceUrl === row.url)) continue;
         const hasBothCommands = Boolean(row.installCommand && row.uninstallCommand);
+        const articleScore = scoreResult(trimmed, inferredName, 'Community source', 'silentinstallhq', hasBothCommands, row.url);
         candidates.push({
           id: `sihq-${slug(row.url)}`,
           name: inferredName,
@@ -348,7 +392,7 @@ export async function resolveWin32Search(query: string, mode: Win32SearchMode): 
           sourceLabel: 'Silent Install HQ',
           sourceUrl: row.url,
           sourceTitle: row.title,
-          confidence: hasBothCommands ? 'medium' : 'low',
+          confidence: inferConfidence(articleScore, inferredName, trimmed, hasBothCommands),
           installCommand: row.installCommand ?? '',
           uninstallCommand: row.uninstallCommand ?? '',
           detectionScript: buildDetectScript(inferredName),
@@ -356,7 +400,7 @@ export async function resolveWin32Search(query: string, mode: Win32SearchMode): 
           notes: row.notes,
           evidence: row.evidence,
           whySelected: `Community packaging article matched ${trimmed}.`,
-          score: scoreResult(trimmed, inferredName, 'Community source', 'silentinstallhq', hasBothCommands)
+          score: articleScore
         });
         altMap.set(`sihq:${row.url}`, {
           title: row.title,
@@ -382,19 +426,26 @@ export async function resolveWin32Search(query: string, mode: Win32SearchMode): 
   }
 
   candidates.sort((a, b) => b.score - a.score);
-  const sourceBackedCandidates = candidates.filter((item) => Boolean(item.installCommand) && !['fallback', 'template'].includes(item.sourceType));
-  const best = sourceBackedCandidates[0] ?? null;
+  const sourceBackedCandidates = candidates
+    .filter((item) => Boolean(item.installCommand) && !['fallback', 'template'].includes(item.sourceType))
+    .filter((item) => isRelevantCandidate(trimmed, item.name, item.publisher, item.packageId ?? item.sourceUrl));
+
+  const limitedCandidates = sourceBackedCandidates.slice(0, mode === 'deep' ? 8 : 5);
+  const best = limitedCandidates[0] ?? null;
+  const hasClearWinner = Boolean(best && (limitedCandidates.length === 1 || best.score - (limitedCandidates[1]?.score ?? 0) >= 35));
 
   return {
-    ok: Boolean(best || sourceBackedCandidates.length > 0),
+    ok: limitedCandidates.length > 0,
     query: trimmed,
     mode,
-    bestMatch: best ? toPublicRecord(best) : null,
-    candidates: sourceBackedCandidates.slice(0, mode === 'deep' ? 8 : 5).map(toPublicRecord),
+    bestMatch: hasClearWinner && best ? toPublicRecord(best) : null,
+    candidates: limitedCandidates.map(toPublicRecord),
     alternatives: [...altMap.values()].filter((item) => !best || item.url !== best.sourceUrl).slice(0, mode === 'deep' ? 8 : 4),
     checkedSources,
-    message: best
-      ? `Resolved ${best.name} from ${best.sourceLabel}.`
-      : 'No reliable source-backed package was found for this query yet. Review the alternatives, switch to Deep Search, or try a more specific edition name.'
+    message: limitedCandidates.length === 0
+      ? 'No reliable source-backed package was found for this query yet. Review the alternatives, switch to Deep Search, or try a more specific edition name.'
+      : hasClearWinner && best
+        ? `Resolved ${best.name} from ${best.sourceLabel}.`
+        : `Found ${limitedCandidates.length} matching package options. Select the edition you want to package.`
   };
 }

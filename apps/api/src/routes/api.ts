@@ -1,6 +1,7 @@
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import fs from 'fs/promises';
 import { buildZip } from '../engines/win32Zip.js';
+import { resolveWin32Search, type Win32SearchMode } from '../engines/win32LiveResolver.js';
 import { DashboardData, SettingsData, ViewName } from '@efm/shared';
 import { config } from '../config.js';
 import { normalizeStatus } from '../engines/normalization.js';
@@ -1922,6 +1923,28 @@ apiRouter.get('/winget/migration-candidates', async (req: Request, res: Response
     return res.json({ rows, message: rows.length ? 'WinGet migration candidates loaded.' : 'No WinGet migration candidates identified yet.' });
   } catch (error) {
     return res.status(500).json({ rows: [], message: error instanceof Error ? error.message : 'Failed to load WinGet migration candidates.' });
+
+apiRouter.get('/win32/search', async (req: Request, res: Response) => {
+  try {
+    const query = String(req.query.q ?? '').trim();
+    const mode = String(req.query.mode ?? 'quick').toLowerCase() === 'deep' ? 'deep' : 'quick';
+    const payload = await resolveWin32Search(query, mode as Win32SearchMode);
+    return res.json(payload);
+  } catch (error) {
+    logger.error({ err: error }, 'Failed to resolve live win32 package');
+    return res.status(500).json({
+      ok: false,
+      query: String(req.query.q ?? ''),
+      mode: String(req.query.mode ?? 'quick').toLowerCase() === 'deep' ? 'deep' : 'quick',
+      bestMatch: null,
+      candidates: [],
+      alternatives: [],
+      checkedSources: ['WinGet', 'Silent Install HQ', 'Vendor search'],
+      message: error instanceof Error ? error.message : 'Failed to resolve live package search.'
+    });
+  }
+});
+
   }
 });
 
@@ -1960,11 +1983,19 @@ apiRouter.post('/win32/bundle', async (req: Request, res: Response) => {
       notes
     } = req.body ?? {};
 
-    if (!appName || !installCommand) {
-      return res.status(400).json({ error: 'appName and installCommand are required' });
+    const normalizedAppName = String(appName ?? '').trim();
+    const normalizedInstallCommand = String(installCommand ?? '').trim();
+    const normalizedSource = String(source ?? '').trim().toLowerCase();
+
+    if (!normalizedAppName || !normalizedInstallCommand) {
+      return res.status(400).json({ error: 'A real app name and install command are required before building a package bundle.' });
     }
 
-    const safeName = String(appName)
+    if (['template', 'fallback'].includes(normalizedSource)) {
+      return res.status(400).json({ error: 'Package bundle creation is blocked for template or fallback results. Select a source-backed package first.' });
+    }
+
+    const safeName = normalizedAppName
       .replace(/[^\w.-]+/g, '-')
       .replace(/-+/g, '-')
       .replace(/^-|-$/g, '')
@@ -1974,7 +2005,7 @@ apiRouter.post('/win32/bundle', async (req: Request, res: Response) => {
 
     const installScript = [
       '$ErrorActionPreference = "Stop"',
-      String(installCommand)
+      normalizedInstallCommand
     ].join('\n');
 
     const uninstallScript = [
@@ -1994,7 +2025,7 @@ apiRouter.post('/win32/bundle', async (req: Request, res: Response) => {
       : ['Validate in a packaging VM before production rollout.'];
 
     const intuneGuide = [
-      `App Name: ${appName}`,
+      `App Name: ${normalizedAppName}`,
       `Publisher: ${publisher || 'Unknown'}`,
       '',
       'Install command:',

@@ -20,6 +20,10 @@ function getResolvedKey(item: Win32ResolvedMatch | null | undefined): string | n
 type Mode = 'quick' | 'deep';
 type NoticeTone = 'info' | 'success' | 'warn';
 
+type Props = {
+  onToast?: (tone: 'info' | 'success' | 'warn' | 'error', text: string) => void;
+};
+
 const sourceLabel: Record<string, string> = {
   winget: 'WinGet',
   silentinstallhq: 'Silent Install HQ',
@@ -143,7 +147,7 @@ function chooseBestMatch(payload: Win32ResolveResponse, preferredId: string | nu
   return candidates.find((item) => hasSourceBackedInstall(item)) ?? candidates[0] ?? null;
 }
 
-export default function Win32UtilityWorkspace() {
+export default function Win32UtilityWorkspace({ onToast }: Props) {
   const [query, setQuery] = useState('Google Chrome');
   const [mode, setMode] = useState<Mode>('quick');
   const [loading, setLoading] = useState(false);
@@ -159,6 +163,7 @@ export default function Win32UtilityWorkspace() {
   }, [result, selectedCandidateId]);
   const canDownloadBundle = hasSourceBackedInstall(best);
   const visibleCandidates = candidates.length ? candidates : best ? [best] : [];
+  const resolutionState = !result ? 'idle' : !result.ok ? 'not_found' : result.bestMatch ? 'resolved' : visibleCandidates.length > 0 ? 'choices' : 'not_found';
 
   async function runResolve() {
     const trimmed = query.trim();
@@ -171,9 +176,12 @@ export default function Win32UtilityWorkspace() {
       setResult(payload);
       const defaultBest = chooseBestMatch(payload, null);
       setSelectedCandidateId(getResolvedKey(defaultBest));
+      onToast?.(payload.ok ? 'success' : 'warn', payload.message);
     } catch (err) {
       setResult(null);
-      setError(err instanceof Error ? err.message : 'Failed to resolve package.');
+      const message = err instanceof Error ? err.message : 'Failed to resolve package.';
+      setError(message);
+      onToast?.('error', message);
     } finally {
       setLoading(false);
     }
@@ -186,11 +194,15 @@ export default function Win32UtilityWorkspace() {
 
   async function handleDownloadBundle() {
     if (!best) {
-      setError('Select a package result before downloading the package folder.');
+      const message = 'Select a package result before downloading the package folder.';
+      setError(message);
+      onToast?.('warn', message);
       return;
     }
     if (!hasSourceBackedInstall(best)) {
-      setError('Download is available only after selecting a source-backed package with a valid install command.');
+      const message = 'Download is available only after selecting a source-backed package with a valid install command.';
+      setError(message);
+      onToast?.('warn', message);
       return;
     }
 
@@ -210,8 +222,11 @@ export default function Win32UtilityWorkspace() {
       });
       const safeName = (best.name || 'win32-package').replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase();
       triggerBlobDownload(blob, `${safeName}-intune-package.zip`);
+      onToast?.('success', `Downloaded package folder for ${best.name}.`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to build package bundle.');
+      const message = err instanceof Error ? err.message : 'Failed to build package bundle.';
+      setError(message);
+      onToast?.('error', message);
     }
   }
 

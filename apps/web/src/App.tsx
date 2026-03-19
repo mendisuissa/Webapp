@@ -28,6 +28,7 @@ import {
 import { recognize } from 'tesseract.js';
 import { IntuneAIDrawer } from './components/IntuneAIDrawer.js';
 import Phase1AuditPanels from './components/Phase1AuditPanels.js';
+import Win32UtilityWorkspace from './components/Win32UtilityWorkspace.js';
 
 type Row = Record<string, unknown>;
 type AuthState = { connected: boolean; upn: string; tenantId: string; displayName: string; mockMode?: boolean; hasWritePermissions?: boolean; scopes?: string[] };
@@ -1339,154 +1340,9 @@ ${result.note}` : result.message);
             ) : null}
 
             {currentView === 'winget' ? (
-              <div className="winget-workspace-grid enhanced">
-                <div className="info-card drawer-card accent">
-                  <div className="section-title">Win32 Utility</div>
-                  <div className="summary-text">Find silent install, uninstall, and detection logic for Intune-ready app packaging without leaving the workspace.</div>
-                  <div className="drawer-actions compact wrap">
-                    <input
-                      className="column-search"
-                      value={win32UtilityQuery}
-                      onChange={(e) => setWin32UtilityQuery(e.target.value)}
-                      placeholder="Search app name or paste a WinGet package ID"
-                      style={{ minWidth: '260px', flex: '1 1 280px' }}
-                    />
-                    <button className="btn btn-primary" type="button" onClick={() => pushToast('success', `${activeWin32Preset.name} ready for packaging review.`)}>Resolve package</button>
-                    <button className="btn btn-secondary" type="button" onClick={onDownloadWin32PackageBundle}>Download package folder</button>
-                    <button className="btn btn-secondary" type="button" onClick={() => void onCopyValue(activeWin32Preset.installCommand)}>Copy install</button>
-                  </div>
-                  <div className="hero-chips wrap" style={{ marginTop: '14px' }}>
-                    <span className="hero-chip">Source: {activeWin32Preset.source}</span>
-                    <span className="hero-chip subtle">Confidence: {activeWin32Preset.confidence}</span>
-                    <span className="hero-chip subtle">Package: {activeWin32Preset.packageId}</span>
-                  </div>
-                </div>
-
-                <div className="info-card drawer-card">
-                  <div className="section-title">Resolved package</div>
-                  <div className="detail-list">
-                    <div className="detail-row"><div className="detail-key">App</div><div className="detail-value">{activeWin32Preset.name}</div></div>
-                    <div className="detail-row"><div className="detail-key">Publisher</div><div className="detail-value">{activeWin32Preset.publisher}</div></div>
-                    <div className="detail-row"><div className="detail-key">Detection</div><div className="detail-value">{activeWin32Preset.detectionType}</div></div>
-                    <div className="detail-row stack"><div className="detail-key">Recommendation</div><div className="detail-value">{activeWin32Preset.detectionSummary}</div></div>
-                  </div>
-                  <div className="drawer-actions compact wrap" style={{ marginTop: '12px' }}>
-                    <button className="btn btn-secondary" type="button" onClick={() => openWingetStudio('deploy')}>Create from catalog</button>
-                    <button className="btn btn-secondary" type="button" onClick={() => void onCopyValue(activeWin32Preset.detectScript)}>Copy detect script</button>
-                  </div>
-                </div>
-
-                <div className="info-card drawer-card">
-                  <div className="section-title">Validation notes</div>
-                  <div className="readiness-list">
-                    {activeWin32Preset.notes.map((note, index) => (
-                      <div key={`${activeWin32Preset.key}-note-${index}`} className="readiness-item ok"><span>{index + 1}</span><span>{note}</span></div>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="info-card drawer-card" style={{ gridColumn: '1 / -1' }}>
-                  <div className="winget-review-grid">
-                    <div className="review-column">
-                      <div className="section-title">Silent install</div>
-                      <div className="detail-row stack"><div className="detail-value code">{activeWin32Preset.installCommand}</div></div>
-                      <div className="drawer-actions compact"><button className="btn btn-secondary" type="button" onClick={() => void onCopyValue(activeWin32Preset.installCommand)}>Copy</button></div>
-                    </div>
-                    <div className="review-column">
-                      <div className="section-title">Silent uninstall</div>
-                      <div className="detail-row stack"><div className="detail-value code">{activeWin32Preset.uninstallCommand}</div></div>
-                      <div className="drawer-actions compact"><button className="btn btn-secondary" type="button" onClick={() => void onCopyValue(activeWin32Preset.uninstallCommand)}>Copy</button></div>
-                    </div>
-                    <div className="review-column">
-                      <div className="section-title">Detect script</div>
-                      <div className="detail-row stack"><div className="detail-value code">{activeWin32Preset.detectScript}</div></div>
-                      <div className="drawer-actions compact"><button className="btn btn-secondary" type="button" onClick={() => void onCopyValue(activeWin32Preset.detectScript)}>Copy</button></div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            ) : currentView === 'ocr' ? (
-              <div className="ocr-assistant">
-                <div className="ocr-assistant-header">
-                  <div>
-                    <div className="ocr-assistant-title">OCR & Error Assistant</div>
-                    <div className="ocr-assistant-subtitle">Upload a screenshot or paste an error, then get actionable remediation guidance.</div>
-                  </div>
-                  <div className={`ocr-status-pill ${ocrStatus === 'Failed' ? 'bad' : ''}`}>OCR: {ocrStatus}</div>
-                </div>
-
-                <div className="ocr-assistant-actions">
-                  <input ref={fileInputRef} type="file" accept="image/png,image/jpeg,image/jpg" onChange={onOcrFilePicked} style={{ display: 'none' }} />
-                  <button className="btn btn-secondary" onClick={onPickImageClick} disabled={!canUseApp || ocrUploadBusy}>Pick Image</button>
-                  <button className="btn btn-secondary" onClick={onRunOcr} disabled={!canUseApp || ocrUploadBusy}>Run OCR</button>
-                  <button className="btn btn-primary" onClick={onGetExplanation} disabled={!canUseApp || ocrUploadBusy}>Get Explanation</button>
-                  {ocrUploadError ? <span className="ocr-error">{ocrUploadError}</span> : null}
-                </div>
-
-                <div className="ocr-assistant-grid">
-                  <div className="ocr-box">
-                    <div className="ocr-box-title">OCR / Manual Input</div>
-                    <textarea className="ocr-textarea" value={ocrManualText} onChange={(e) => setOcrManualText(e.target.value)} placeholder="Paste error text manually or run OCR from image..." />
-                  </div>
-                  <div className="ocr-box">
-                    <div className="ocr-box-title">Assistant Answer</div>
-                    <textarea className="ocr-textarea" value={ocrAnswer} onChange={(e) => setOcrAnswer(e.target.value)} placeholder="No explanation yet. Pick image or paste text, then click Get Explanation." />
-                  </div>
-                </div>
-              </div>
-            ) : filteredRows.length === 0 ? (
-              <div className="empty-state">
-                <div className="empty-state-title">No rows returned</div>
-                <div>{currentView === 'apps' && appsPlatformFilter !== 'all' ? `No ${appsPlatformFilter} apps matched the current filter.` : statusMessage}</div>
-              </div>
-            ) : (
-              <div className="table-shell">
-                <table className="data-table">
-                  <thead>
-                    <tr>
-                      {visibleHeaders.map((header) => <th key={header}>{getHeaderLabel(currentView, header)}</th>)}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filteredRows.map((row, index) => (
-                      <tr
-                        key={String(row['id'] ?? `${currentView}-${index}`)}
-                        className={`table-row ${selectedIndex === index ? 'active' : ''} ${currentView === 'apps' ? 'table-row-app' : ''}`}
-                        onClick={() => {
-                          const actualIndex = rows.findIndex((candidate) => candidate === row);
-                          setSelectedIndex(actualIndex >= 0 ? actualIndex : index);
-                          setDetailsSummary(currentView === 'apps' ? getAppDisplayLabel(row) : toText(row['name'] ?? row['deviceName'] ?? row['displayName'] ?? row['appName'] ?? 'Row selected'));
-                          setDetailsText(toText(row['details'] ?? row));
-                        }}
-                        onDoubleClick={() => {
-                          if (currentView === 'apps') openAppDetails(row);
-                        }}
-                        onContextMenu={(event) => onAppRowContextMenu(event, row)}
-                      >
-                        {visibleHeaders.map((header) => <td key={`${String(row['id'] ?? index)}-${header}`}>{getCellDisplayValue(currentView, row, header)}</td>)}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
+              <Win32UtilityWorkspace onToast={pushToast} />
+            ) : null}
           </section>
-
-          {currentView === 'apps' && selectedAppRow && appAudit ? (
-            <section className="panel main phase1-audit-section">
-              <div className="panel-toolbar panel-toolbar-top">
-                <div>
-                  <div className="panel-eyebrow">Operational audit</div>
-                  <div className="panel-title">Failure clustering, remediation, and verification</div>
-                </div>
-                <div className="panel-caption">
-                  {toText(selectedAppRow.name ?? selectedAppRow.appName ?? 'Selected app')}
-                </div>
-              </div>
-
-              <Phase1AuditPanels audit={appAudit} />
-            </section>
-          ) : null}
         </main>
 
         <aside className="panel right">
