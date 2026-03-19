@@ -46,6 +46,8 @@ jobs:
         run: |
           test -f out/apps/api/server.js
           test -f out/apps/web/index.html
+          findstr="win32/search"
+          grep -q "$findstr" out/apps/api/routes/api.js
 
       - name: Upload deployment artifact
         uses: actions/upload-artifact@v4
@@ -94,7 +96,6 @@ jobs:
             SCM_DO_BUILD_DURING_DEPLOYMENT=false \
             ENABLE_ORYX_BUILD=false \
             WEBSITE_WARMUP_PATH=/api/health \
-            curl -fsS "https://app.modernendpoint.tech/api/win32/search?q=google%20chrome&mode=quick"
             WEBSITES_CONTAINER_START_TIME_LIMIT=1800
 
           az webapp config set \
@@ -115,7 +116,7 @@ jobs:
       - name: Post-deploy API health check
         run: |
           for i in 1 2 3 4 5 6; do
-            if curl -fsS https://app.modernendpoint.tech/api/health; then
+            if curl -fsS "https://app.modernendpoint.tech/api/health"; then
               exit 0
             fi
             echo "Health check failed, retrying in 10 seconds..."
@@ -124,9 +125,21 @@ jobs:
           echo "Health check failed after retries"
           exit 1
 
+      - name: Post-deploy win32 search smoke check
+        run: |
+          for i in 1 2 3 4 5 6; do
+            if curl -fsS "https://app.modernendpoint.tech/api/win32/search?q=google%20chrome&mode=quick" > /tmp/win32-search.json; then
+              break
+            fi
+            echo "Win32 search check failed, retrying in 10 seconds..."
+            sleep 10
+          done
+
+          grep -Eq '"status"|"resolved"|"choices"|"not_found"' /tmp/win32-search.json
+
       - name: Post-deploy frontend smoke check
         run: |
-          curl -fsS https://app.modernendpoint.tech > /tmp/index.html
+          curl -fsS "https://app.modernendpoint.tech" > /tmp/index.html
           grep -qi "<html" /tmp/index.html
 
       - name: Deployment summary
@@ -138,5 +151,6 @@ jobs:
             echo "- URL: https://app.modernendpoint.tech"
             echo "- Branch: main"
             echo "- API health: passed"
+            echo "- Win32 search smoke check: passed"
             echo "- Frontend smoke check: passed"
           } >> $GITHUB_STEP_SUMMARY
