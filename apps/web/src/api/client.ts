@@ -306,11 +306,23 @@ export interface Win32AlternativeRecord {
   note: string;
 }
 
+export type Win32CandidateRecord =
+  | ({
+      packageId?: string;
+      url?: string;
+      sourceUrl?: string;
+      name: string;
+      publisher?: string;
+      source?: string;
+    })
+  | Win32ResolvedMatch;
+
 export interface Win32ResolveResponse {
   ok: boolean;
   query: string;
   message: string;
   bestMatch: Win32ResolvedMatch | null;
+  candidates: Win32ResolvedMatch[];
   alternatives: Win32AlternativeRecord[];
   checkedSources: string[];
 }
