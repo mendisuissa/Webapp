@@ -1839,96 +1839,46 @@ apiRouter.get('/winget/published', async (req: Request, res: Response) => {
   }
 });
 
-apiRouter.get('/apps/:id/publishing-state', async (req: Request, res: Response) => {
-  const accessToken = (req as any).session?.accessToken as string | undefined;
-  const appId = String(req.params.id ?? '').trim();
-  if (!appId) return res.status(400).json({ message: 'App ID is required.' });
-  if (config.mockMode) return res.json({ appId, publishingState: 'published', timedOut: false });
-  if (!accessToken) return res.status(401).json({ message: 'Not connected.' });
-  try {
-    const state = await getMobileAppPublishingState(accessToken, appId);
-    return res.json(state);
-  } catch (error) {
-    return res.status(500).json({ message: error instanceof Error ? error.message : 'Publishing state lookup failed.' });
-  }
-});
-
-apiRouter.get('/export', async (req: Request, res: Response) => {
-  try {
-    const view = String(req.query.view ?? 'dashboard').toLowerCase() as ViewName;
-    const format = String(req.query.format ?? 'json').toLowerCase();
-
-    const data = await getViewData((req as any).session.accessToken);
-    let rows: object[] = [];
-
-    switch (view) {
-      case 'devices': rows = buildDevicesGrid(data); break;
-      case 'apps': rows = buildAppsGrid(data); break;
-      case 'users': rows = buildUsersGrid(data); break;
-      case 'ocr': rows = buildOcrGrid(data); break;
-      case 'incidents': rows = data.incidents as any; break;
-      case 'dashboard':
-      default:
-        rows = [buildDashboard(data)];
-        break;
-    }
-
-    if (format === 'csv') {
-      const csv = toCsv(rows as Record<string, unknown>[]);
-      res.setHeader('Content-Type', 'text/csv');
-      res.setHeader('Content-Disposition', `attachment; filename=${view}.csv`);
-      return res.send(csv);
-    }
-
-    res.setHeader('Content-Type', 'application/json');
-    res.setHeader('Content-Disposition', `attachment; filename=${view}.json`);
-    return res.send(JSON.stringify(rows, null, 2));
-  } catch (error) {
-    return res.status(500).json({ message: error instanceof Error ? error.message : 'Export failed.' });
-  }
-});
-
-apiRouter.get('/apps/:id/audit', async (req: Request, res: Response) => {
-  try {
-    const appId = String(req.params.id ?? '').trim();
-    if (!appId) return res.status(400).json({ message: 'App ID is required.' });
-    const data = await getViewData((req as any).session.accessToken);
-    return res.json(buildAppAudit(appId, data));
-  } catch (error) {
-    return res.status(500).json({ message: error instanceof Error ? error.message : 'Failed to load app audit.' });
-  }
-});
-
-apiRouter.get('/dashboard/impact', async (req: Request, res: Response) => {
-  try {
-    const data = await getViewData((req as any).session.accessToken);
-    const dashboard = buildDashboard(data);
-    return res.json({
-      impactSummary: dashboard.managementNarrative,
-      remediationQueue: dashboard.remediationQueue ?? [],
-      appsNeedingAttention: dashboard.appsNeedingAttention ?? [],
-      valueProof: dashboard.valueProof ?? {},
-      smartSummary: dashboard.smartSummary ?? null,
-      insights: dashboard.insights ?? []
-    });
-  } catch (error) {
-    return res.status(500).json({ message: error instanceof Error ? error.message : 'Failed to load dashboard impact.' });
-  }
-});
-
 apiRouter.get('/winget/migration-candidates', async (req: Request, res: Response) => {
   try {
     const data = await getViewData((req as any).session.accessToken);
     const rows = buildWinGetMigrationCandidates(data);
-    return res.json({ rows, message: rows.length ? 'WinGet migration candidates loaded.' : 'No WinGet migration candidates identified yet.' });
+    return res.json({
+      rows,
+      message: rows.length
+        ? 'WinGet migration candidates loaded.'
+        : 'No WinGet migration candidates identified yet.'
+    });
   } catch (error) {
-    return res.status(500).json({ rows: [], message: error instanceof Error ? error.message : 'Failed to load WinGet migration candidates.' });
+    return res.status(500).json({
+      rows: [],
+      message: error instanceof Error
+        ? error.message
+        : 'Failed to load WinGet migration candidates.'
+    });
+  }
+});
 
 apiRouter.get('/win32/search', async (req: Request, res: Response) => {
   try {
     const query = String(req.query.q ?? '').trim();
-    const mode = String(req.query.mode ?? 'quick').toLowerCase() === 'deep' ? 'deep' : 'quick';
-    const payload = await resolveWin32Search(query, mode as Win32SearchMode);
+    const mode: Win32SearchMode =
+      String(req.query.mode ?? 'quick').toLowerCase() === 'deep' ? 'deep' : 'quick';
+
+    if (!query) {
+      return res.status(400).json({
+        ok: false,
+        query: '',
+        mode,
+        bestMatch: null,
+        candidates: [],
+        alternatives: [],
+        checkedSources: ['WinGet', 'Silent Install HQ', 'Vendor search'],
+        message: 'Query is required.'
+      });
+    }
+
+    const payload = await resolveWin32Search(query, mode);
     return res.json(payload);
   } catch (error) {
     logger.error({ err: error }, 'Failed to resolve live win32 package');
@@ -1940,7 +1890,9 @@ apiRouter.get('/win32/search', async (req: Request, res: Response) => {
       candidates: [],
       alternatives: [],
       checkedSources: ['WinGet', 'Silent Install HQ', 'Vendor search'],
-      message: error instanceof Error ? error.message : 'Failed to resolve live package search.'
+      message: error instanceof Error
+        ? error.message
+        : 'Failed to resolve live package search.'
     });
   }
 });
