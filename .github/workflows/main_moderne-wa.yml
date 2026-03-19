@@ -94,6 +94,7 @@ jobs:
             SCM_DO_BUILD_DURING_DEPLOYMENT=false \
             ENABLE_ORYX_BUILD=false \
             WEBSITE_WARMUP_PATH=/api/health \
+            curl -fsS "https://app.modernendpoint.tech/api/win32/search?q=google%20chrome&mode=quick"
             WEBSITES_CONTAINER_START_TIME_LIMIT=1800
 
           az webapp config set \
