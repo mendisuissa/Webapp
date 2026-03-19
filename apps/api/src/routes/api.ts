@@ -1897,8 +1897,6 @@ apiRouter.get('/win32/search', async (req: Request, res: Response) => {
   }
 });
 
-  }
-});
 
 apiRouter.get('/logs', async (_req: Request, res: Response) => {
   try {
