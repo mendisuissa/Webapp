@@ -1,5 +1,16 @@
 export type Win32SearchMode = 'quick' | 'deep';
 export type Win32SourceType = 'winget' | 'silentinstallhq' | 'vendor' | 'chocolatey' | 'github' | 'officialdocs' | 'fallback';
+export type InstallerType = 'exe' | 'msi' | 'msix' | 'zip' | 'unknown';
+export type ExportReadiness = 'ready' | 'partial' | 'research-needed';
+
+type InstallerInsight = {
+  installerUrl?: string;
+  installerType?: InstallerType;
+  downloadPageUrl?: string;
+  version?: string;
+  docsUrl?: string;
+  releaseUrl?: string;
+};
 
 type Win32ResolvedRecord = {
   id: string;
@@ -11,6 +22,8 @@ type Win32ResolvedRecord = {
   sourceUrl?: string;
   sourceTitle: string;
   confidence: 'high' | 'medium' | 'low';
+  confidenceScore: number;
+  confidenceReasons: string[];
   installCommand: string;
   uninstallCommand: string;
   detectionScript: string;
@@ -19,6 +32,13 @@ type Win32ResolvedRecord = {
   evidence: string[];
   whySelected: string;
   score: number;
+  installerUrl?: string;
+  installerType?: InstallerType;
+  downloadPageUrl?: string;
+  version?: string;
+  docsUrl?: string;
+  releaseUrl?: string;
+  exportReadiness: ExportReadiness;
 };
 
 export type Win32SearchResponse = {
@@ -32,6 +52,8 @@ export type Win32SearchResponse = {
     packageId?: string;
     source: Win32SourceType;
     confidence: 'high' | 'medium' | 'low';
+    confidenceScore: number;
+    confidenceReasons: string[];
     installCommand: string;
     uninstallCommand: string;
     detectScript: string;
@@ -39,6 +61,13 @@ export type Win32SearchResponse = {
     notes: string[];
     evidence: string[];
     sourceUrl?: string;
+    installerUrl?: string;
+    installerType?: InstallerType;
+    downloadPageUrl?: string;
+    version?: string;
+    docsUrl?: string;
+    releaseUrl?: string;
+    exportReadiness: ExportReadiness;
   } | null;
   candidates: Array<{
     id: string;
@@ -47,6 +76,8 @@ export type Win32SearchResponse = {
     packageId?: string;
     source: Win32SourceType;
     confidence: 'high' | 'medium' | 'low';
+    confidenceScore: number;
+    confidenceReasons: string[];
     installCommand: string;
     uninstallCommand: string;
     detectScript: string;
@@ -54,6 +85,13 @@ export type Win32SearchResponse = {
     notes: string[];
     evidence: string[];
     sourceUrl?: string;
+    installerUrl?: string;
+    installerType?: InstallerType;
+    downloadPageUrl?: string;
+    version?: string;
+    docsUrl?: string;
+    releaseUrl?: string;
+    exportReadiness: ExportReadiness;
   }>;
   alternatives: Array<{
     title: string;
@@ -79,6 +117,9 @@ type SilentInstallRow = {
   uninstallCommand?: string;
   notes: string[];
   evidence: string[];
+  installerUrl?: string;
+  installerType?: InstallerType;
+  version?: string;
 };
 
 type ChocolateySearchRow = {
@@ -150,6 +191,7 @@ function expandQueries(query: string, mode: Win32SearchMode) {
     for (const value of [...values]) {
       values.add(`${value} silent install`);
       values.add(`${value} install uninstall`);
+      values.add(`${value} msi exe`);
     }
   }
 
@@ -163,6 +205,76 @@ async function fetchText(url: string) {
   });
   if (!response.ok) throw new Error(`Fetch failed for ${url} (${response.status}).`);
   return await response.text();
+}
+
+function inferInstallerType(url?: string): InstallerType | undefined {
+  if (!url) return undefined;
+  const value = url.toLowerCase();
+  if (value.includes('.msix')) return 'msix';
+  if (value.includes('.msi')) return 'msi';
+  if (value.includes('.exe')) return 'exe';
+  if (value.includes('.zip')) return 'zip';
+  return undefined;
+}
+
+function extractVersion(text: string): string | undefined {
+  const match = text.match(/\b(20\d{2}(?:\.\d+){0,3}|\d{1,3}(?:\.\d+){1,3})\b/);
+  return match?.[1];
+}
+
+function pickBestInstaller(urls: string[]): { installerUrl?: string; installerType?: InstallerType } {
+  const ranked = urls
+    .map((url) => ({ url, type: inferInstallerType(url) ?? 'unknown' as InstallerType }))
+    .filter((item) => item.type !== 'zip')
+    .sort((a, b) => {
+      const rank = (t: InstallerType) => (t === 'msi' ? 1 : t === 'exe' ? 2 : t === 'msix' ? 3 : t === 'zip' ? 4 : 5);
+      return rank(a.type) - rank(b.type);
+    });
+  const best = ranked[0] ?? urls[0] ? { url: urls[0], type: inferInstallerType(urls[0]) ?? 'unknown' as InstallerType } : undefined;
+  return best ? { installerUrl: best.url, installerType: best.type } : {};
+}
+
+function extractUrls(html: string) {
+  const urls = new Set<string>();
+  for (const match of html.matchAll(/https?:\/\/[^\s"'<>]+/gi)) {
+    const url = (match[0] ?? '').replace(/[),.;]+$/, '');
+    if (url) urls.add(url);
+  }
+  for (const match of html.matchAll(/href=["']([^"']+)["']/gi)) {
+    const url = match[1] ?? '';
+    if (/^https?:\/\//i.test(url)) urls.add(url);
+  }
+  return [...urls];
+}
+
+function extractDirectInstallerLinks(html: string) {
+  const urls = extractUrls(html).filter((url) => /\.(msi|exe|msix|zip)(\?|$)/i.test(url));
+  return [...new Set(urls)];
+}
+
+function extractCommandsFromHtml(html: string) {
+  const blocks = [
+    ...html.matchAll(/<pre[^>]*>([\s\S]*?)<\/pre>/gi),
+    ...html.matchAll(/<code[^>]*>([\s\S]*?)<\/code>/gi)
+  ].map((match) => htmlDecode(match[1] ?? ''));
+
+  const candidates = blocks
+    .map((line) => line.split(/\r?\n/).map((item) => item.trim()).filter(Boolean))
+    .flat()
+    .filter((line) => /(msiexec|setup\.exe|\.exe\s|\.msi|\/quiet|\/qn|\/S|\/silent|\/verysilent|uninstall|winget install|winget uninstall|choco install|choco uninstall)/i.test(line));
+
+  const installCommand = candidates.find((line) => !/uninstall/i.test(line) && /(msiexec|winget install|choco install|\/quiet|\/qn|\/s|\/silent|\/verysilent)/i.test(line));
+  const uninstallCommand = candidates.find((line) => /uninstall|msiexec\s+\/x|winget uninstall|choco uninstall/i.test(line));
+  const directLinks = extractDirectInstallerLinks(html);
+  const installerPick = pickBestInstaller(directLinks);
+
+  return {
+    installCommand: installCommand?.trim(),
+    uninstallCommand: uninstallCommand?.trim(),
+    evidence: candidates.slice(0, 8),
+    ...installerPick,
+    version: extractVersion(stripTags(html))
+  };
 }
 
 async function searchWingetCatalog(query: string): Promise<WingetSearchRow[]> {
@@ -190,20 +302,16 @@ async function searchWingetCatalog(query: string): Promise<WingetSearchRow[]> {
   return rows;
 }
 
-function extractCommandsFromHtml(html: string) {
-  const blocks = [
-    ...html.matchAll(/<pre[^>]*>([\s\S]*?)<\/pre>/gi),
-    ...html.matchAll(/<code[^>]*>([\s\S]*?)<\/code>/gi)
-  ].map((match) => stripTags(match[1] ?? ''));
-
-  const candidates = blocks
-    .map((line) => line.split(/\r?\n/).map((item) => item.trim()).filter(Boolean))
-    .flat()
-    .filter((line) => /(msiexec|setup\.exe|\.exe\s|\.msi|\/quiet|\/qn|\/S|\/silent|\/verysilent|uninstall|winget install|winget uninstall)/i.test(line));
-
-  const installCommand = candidates.find((line) => !/uninstall/i.test(line) && /(msiexec|winget install|\/quiet|\/qn|\/s|\/silent|\/verysilent)/i.test(line));
-  const uninstallCommand = candidates.find((line) => /uninstall|msiexec\s+\/x|winget uninstall/i.test(line));
-  return { installCommand: installCommand?.trim(), uninstallCommand: uninstallCommand?.trim(), evidence: candidates.slice(0, 8) };
+async function inspectWingetPackagePage(url: string): Promise<InstallerInsight> {
+  try {
+    const html = await fetchText(url);
+    const directLinks = extractDirectInstallerLinks(html);
+    const installerPick = pickBestInstaller(directLinks);
+    const version = extractVersion(stripTags(html));
+    return { ...installerPick, downloadPageUrl: url, version };
+  } catch {
+    return { downloadPageUrl: url };
+  }
 }
 
 async function searchSilentInstallHq(query: string): Promise<SilentInstallRow[]> {
@@ -226,6 +334,9 @@ async function searchSilentInstallHq(query: string): Promise<SilentInstallRow[]>
         url,
         installCommand: commands.installCommand,
         uninstallCommand: commands.uninstallCommand,
+        installerUrl: commands.installerUrl,
+        installerType: commands.installerType,
+        version: commands.version,
         notes: ['Commands captured from Silent Install HQ. Validate against your exact installer media before production use.'],
         evidence: commands.evidence
       });
@@ -236,8 +347,6 @@ async function searchSilentInstallHq(query: string): Promise<SilentInstallRow[]>
 
   return rows;
 }
-
-
 
 async function searchChocolateyCatalog(query: string): Promise<ChocolateySearchRow[]> {
   const html = await fetchText(`https://community.chocolatey.org/packages?q=${encodeURIComponent(query)}`);
@@ -261,6 +370,18 @@ async function searchChocolateyCatalog(query: string): Promise<ChocolateySearchR
   return rows;
 }
 
+async function inspectChocolateyPackagePage(url: string): Promise<InstallerInsight> {
+  try {
+    const html = await fetchText(url);
+    const directLinks = extractDirectInstallerLinks(html);
+    const installerPick = pickBestInstaller(directLinks);
+    const version = extractVersion(stripTags(html));
+    return { ...installerPick, downloadPageUrl: url, version };
+  } catch {
+    return { downloadPageUrl: url };
+  }
+}
+
 function buildOfficialDocAlternatives(query: string) {
   const encoded = encodeURIComponent(query);
   return [
@@ -281,20 +402,84 @@ function buildOfficialDocAlternatives(query: string) {
 
 function buildDetectScript(appName: string) {
   const escapedName = appName.replace(/'/g, "''");
-  return `$appName = '${escapedName}'\n$registryPaths = @(\n  'HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*',\n  'HKLM:\\Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*'\n)\n$found = Get-ItemProperty -Path $registryPaths -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -like \"*$appName*\" }\nif ($found) {\n  Write-Output \"Detected via registry\"\n  exit 0\n}\nexit 1`;
+  return `$appName = '${escapedName}'\n$registryPaths = @(\n  'HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*',\n  'HKLM:\\Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*'\n)\n$found = Get-ItemProperty -Path $registryPaths -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -like "*$appName*" }\nif ($found) {\n  Write-Output "Detected via registry"\n  exit 0\n}\nexit 1`;
 }
 
-function scoreResult(query: string, candidateName: string, publisher: string, sourceType: Win32SourceType, hasBothCommands: boolean) {
+function computeConfidence(query: string, candidateName: string, publisher: string, sourceType: Win32SourceType, options: { hasInstall: boolean; hasUninstall: boolean; installerType?: InstallerType; installerUrl?: string; docsUrl?: string; releaseUrl?: string; packageId?: string; }) {
   const qTokens = tokenize(query);
   const cTokens = tokenize(candidateName);
-  let score = 0;
+  let score = 18;
+  const reasons: string[] = [];
+  let matchedTokens = 0;
   for (const token of qTokens) {
-    if (cTokens.includes(token)) score += 30;
-    if (normalize(publisher).includes(token)) score += 10;
+    if (cTokens.includes(token)) {
+      matchedTokens += 1;
+      score += 16;
+    }
+    if (normalize(publisher).includes(token)) score += 6;
   }
-  if (normalize(candidateName) === normalize(query)) score += 80;
-  if (sourceType === 'winget') score += 20;
-  if (hasBothCommands) score += 25;
+  if (matchedTokens) reasons.push(`Matched ${matchedTokens} query token${matchedTokens > 1 ? 's' : ''}`);
+  if (normalize(candidateName) === normalize(query)) {
+    score += 26;
+    reasons.push('Exact product name match');
+  }
+  if (options.packageId && normalize(options.packageId).includes(normalize(query))) {
+    score += 10;
+    reasons.push('Package identifier aligns with the query');
+  }
+  const sourceBonus: Record<Win32SourceType, number> = {
+    winget: 24,
+    officialdocs: 22,
+    github: 18,
+    chocolatey: 14,
+    silentinstallhq: 10,
+    vendor: 12,
+    fallback: 0
+  };
+  score += sourceBonus[sourceType] ?? 0;
+  reasons.push(`${sourceType === 'officialdocs' ? 'Official docs' : sourceType === 'github' ? 'GitHub release' : sourceType === 'silentinstallhq' ? 'Silent Install HQ' : sourceType === 'chocolatey' ? 'Chocolatey' : sourceType === 'winget' ? 'WinGet' : 'Vendor'} source metadata found`);
+  if (options.hasInstall) {
+    score += 10;
+    reasons.push('Install command available');
+  }
+  if (options.hasUninstall) {
+    score += 8;
+    reasons.push('Uninstall command available');
+  }
+  if (options.installerUrl) {
+    score += 18;
+    reasons.push('Direct installer link found');
+  }
+  if (options.installerType && options.installerType !== 'unknown') {
+    score += options.installerType === 'msi' ? 14 : 10;
+    reasons.push(`Installer type identified: ${options.installerType.toUpperCase()}`);
+  }
+  if (options.docsUrl) {
+    score += 8;
+    reasons.push('Deployment guidance link available');
+  }
+  if (options.releaseUrl) {
+    score += 6;
+    reasons.push('Release source available');
+  }
+  score = Math.max(0, Math.min(99, score));
+  const confidence = score >= 82 ? 'high' : score >= 58 ? 'medium' : 'low';
+  return { score, confidence, reasons } as const;
+}
+
+function resolveExportReadiness(record: Pick<Win32ResolvedRecord, 'installCommand' | 'sourceType' | 'installerUrl' | 'installerType'>): ExportReadiness {
+  if (record.installCommand && record.installerUrl && record.installerType && record.installerType !== 'unknown' && !['fallback'].includes(record.sourceType)) return 'ready';
+  if (record.installCommand && !['fallback'].includes(record.sourceType)) return 'partial';
+  return 'research-needed';
+}
+
+function scoreResult(query: string, candidateName: string, publisher: string, sourceType: Win32SourceType, hasBothCommands: boolean, installerType?: InstallerType) {
+  let score = computeConfidence(query, candidateName, publisher, sourceType, {
+    hasInstall: hasBothCommands,
+    hasUninstall: hasBothCommands,
+    installerType
+  }).score;
+  if (sourceType === 'winget') score += 6;
   return score;
 }
 
@@ -306,13 +491,22 @@ function toPublicRecord(item: Win32ResolvedRecord) {
     packageId: item.packageId,
     source: item.sourceType,
     confidence: item.confidence,
+    confidenceScore: item.confidenceScore,
+    confidenceReasons: item.confidenceReasons,
     installCommand: item.installCommand,
     uninstallCommand: item.uninstallCommand,
     detectScript: item.detectionScript,
     whySelected: item.whySelected,
     notes: item.notes,
     evidence: item.evidence,
-    sourceUrl: item.sourceUrl
+    sourceUrl: item.sourceUrl,
+    installerUrl: item.installerUrl,
+    installerType: item.installerType,
+    downloadPageUrl: item.downloadPageUrl,
+    version: item.version,
+    docsUrl: item.docsUrl,
+    releaseUrl: item.releaseUrl,
+    exportReadiness: item.exportReadiness
   };
 }
 
@@ -343,7 +537,17 @@ export async function resolveWin32Search(query: string, mode: Win32SearchMode): 
       for (const row of rows) {
         if (candidates.some((item) => item.packageId === row.packageIdentifier)) continue;
         const name = row.name.replace(/\b\w/g, (m) => m.toUpperCase());
-        candidates.push({
+        const installer = mode === 'deep' ? await inspectWingetPackagePage(row.sourceUrl) : { downloadPageUrl: row.sourceUrl };
+        const confidence = computeConfidence(trimmed, name, row.publisher, 'winget', {
+          hasInstall: true,
+          hasUninstall: true,
+          installerType: installer.installerType,
+          installerUrl: installer.installerUrl,
+          packageId: row.packageIdentifier,
+          docsUrl: installer.docsUrl,
+          releaseUrl: installer.releaseUrl
+        });
+        const record: Win32ResolvedRecord = {
           id: `winget-${slug(row.packageIdentifier)}`,
           name,
           publisher: row.publisher,
@@ -352,19 +556,31 @@ export async function resolveWin32Search(query: string, mode: Win32SearchMode): 
           sourceLabel: 'WinGet',
           sourceUrl: row.sourceUrl,
           sourceTitle: row.packageIdentifier,
-          confidence: 'high',
+          confidence: confidence.confidence,
+          confidenceScore: confidence.score,
+          confidenceReasons: confidence.reasons,
           installCommand: `winget install --id ${row.packageIdentifier} --exact --silent --accept-source-agreements --accept-package-agreements`,
           uninstallCommand: `winget uninstall --id ${row.packageIdentifier} --exact --silent`,
           detectionScript: buildDetectScript(name),
           detectionSummary: 'Generated detection script based on app name and standard registry uninstall locations.',
           notes: [
             'Install and uninstall commands are source-backed by the WinGet package identifier.',
+            installer.installerUrl ? 'Installer evidence was detected from the WinGet package page.' : 'No direct EXE/MSI link was exposed on the package page.',
             'Validate generated detection logic in a packaging VM before production rollout.'
           ],
-          evidence: [row.packageIdentifier, row.sourceUrl],
+          evidence: [row.packageIdentifier, row.sourceUrl].filter(Boolean),
           whySelected: `Best source-backed match from WinGet for ${trimmed}.`,
-          score: scoreResult(trimmed, name, row.publisher, 'winget', true)
-        });
+          score: scoreResult(trimmed, name, row.publisher, 'winget', true, installer.installerType),
+          installerUrl: installer.installerUrl,
+          installerType: installer.installerType,
+          downloadPageUrl: installer.downloadPageUrl,
+          version: installer.version,
+          docsUrl: installer.docsUrl,
+          releaseUrl: installer.releaseUrl,
+          exportReadiness: 'partial'
+        };
+        record.exportReadiness = resolveExportReadiness(record);
+        candidates.push(record);
         altMap.set(`winget:${row.packageIdentifier}`, {
           title: `${name} (${row.publisher})`,
           source: 'winget',
@@ -387,7 +603,14 @@ export async function resolveWin32Search(query: string, mode: Win32SearchMode): 
         if (!row.installCommand && !row.uninstallCommand) continue;
         if (candidates.some((item) => item.sourceUrl === row.url)) continue;
         const hasBothCommands = Boolean(row.installCommand && row.uninstallCommand);
-        candidates.push({
+        const confidence = computeConfidence(trimmed, inferredName, 'Community source', 'silentinstallhq', {
+          hasInstall: Boolean(row.installCommand),
+          hasUninstall: Boolean(row.uninstallCommand),
+          installerType: row.installerType,
+          installerUrl: row.installerUrl,
+          docsUrl: row.url
+        });
+        const record: Win32ResolvedRecord = {
           id: `sihq-${slug(row.url)}`,
           name: inferredName,
           publisher: 'Community source',
@@ -396,7 +619,9 @@ export async function resolveWin32Search(query: string, mode: Win32SearchMode): 
           sourceLabel: 'Silent Install HQ',
           sourceUrl: row.url,
           sourceTitle: row.title,
-          confidence: hasBothCommands ? 'medium' : 'low',
+          confidence: confidence.confidence,
+          confidenceScore: confidence.score,
+          confidenceReasons: confidence.reasons,
           installCommand: row.installCommand ?? '',
           uninstallCommand: row.uninstallCommand ?? '',
           detectionScript: buildDetectScript(inferredName),
@@ -404,8 +629,17 @@ export async function resolveWin32Search(query: string, mode: Win32SearchMode): 
           notes: row.notes,
           evidence: row.evidence,
           whySelected: `Community packaging article matched ${trimmed}.`,
-          score: scoreResult(trimmed, inferredName, 'Community source', 'silentinstallhq', hasBothCommands)
-        });
+          score: scoreResult(trimmed, inferredName, 'Community source', 'silentinstallhq', hasBothCommands, row.installerType),
+          installerUrl: row.installerUrl,
+          installerType: row.installerType,
+          downloadPageUrl: row.url,
+          version: row.version,
+          docsUrl: row.url,
+          releaseUrl: undefined,
+          exportReadiness: 'partial'
+        };
+        record.exportReadiness = resolveExportReadiness(record);
+        candidates.push(record);
         altMap.set(`sihq:${row.url}`, {
           title: row.title,
           source: 'silentinstallhq',
@@ -425,7 +659,16 @@ export async function resolveWin32Search(query: string, mode: Win32SearchMode): 
       for (const row of rows) {
         if (candidates.some((item) => item.packageId?.toLowerCase() === row.packageId.toLowerCase())) continue;
         const name = row.name.replace(/\b\w/g, (m) => m.toUpperCase());
-        candidates.push({
+        const installer = mode === 'deep' ? await inspectChocolateyPackagePage(row.sourceUrl) : { downloadPageUrl: row.sourceUrl };
+        const confidence = computeConfidence(trimmed, name, 'Chocolatey community', 'chocolatey', {
+          hasInstall: true,
+          hasUninstall: true,
+          installerType: installer.installerType,
+          installerUrl: installer.installerUrl,
+          packageId: row.packageId,
+          releaseUrl: installer.releaseUrl
+        });
+        const record: Win32ResolvedRecord = {
           id: `choco-${slug(row.packageId)}`,
           name,
           publisher: 'Chocolatey community',
@@ -434,19 +677,31 @@ export async function resolveWin32Search(query: string, mode: Win32SearchMode): 
           sourceLabel: 'Chocolatey',
           sourceUrl: row.sourceUrl,
           sourceTitle: row.packageId,
-          confidence: 'medium',
+          confidence: confidence.confidence,
+          confidenceScore: confidence.score,
+          confidenceReasons: confidence.reasons,
           installCommand: `choco install ${row.packageId} -y --no-progress`,
           uninstallCommand: `choco uninstall ${row.packageId} -y --remove-dependencies`,
           detectionScript: buildDetectScript(name),
           detectionSummary: 'Detection script generated from Chocolatey package name and standard uninstall registry locations.',
           notes: [
             'Chocolatey package commands are community-backed and should be validated in a packaging VM before production use.',
+            installer.installerUrl ? 'Direct installer evidence was extracted from Chocolatey package metadata.' : 'Chocolatey metadata was found but no direct EXE/MSI link was extracted.',
             'Use Chocolatey when WinGet does not provide the edition or metadata you need.'
           ],
-          evidence: [row.packageId, row.sourceUrl],
+          evidence: [row.packageId, row.sourceUrl].filter(Boolean),
           whySelected: `Chocolatey package matched ${trimmed}.`,
-          score: scoreResult(trimmed, name, 'Chocolatey community', 'chocolatey', true) - 5
-        });
+          score: scoreResult(trimmed, name, 'Chocolatey community', 'chocolatey', true, installer.installerType) - 5,
+          installerUrl: installer.installerUrl,
+          installerType: installer.installerType,
+          downloadPageUrl: installer.downloadPageUrl,
+          version: installer.version,
+          docsUrl: undefined,
+          releaseUrl: installer.releaseUrl,
+          exportReadiness: 'partial'
+        };
+        record.exportReadiness = resolveExportReadiness(record);
+        candidates.push(record);
         altMap.set(`choco:${row.packageId}`, {
           title: `${name} (${row.packageId})`,
           source: 'chocolatey',
@@ -475,7 +730,7 @@ export async function resolveWin32Search(query: string, mode: Win32SearchMode): 
   }
 
   candidates.sort((a, b) => b.score - a.score);
-  const sourceBackedCandidates = candidates.filter((item) => Boolean(item.installCommand) && !['fallback', 'template'].includes(item.sourceType));
+  const sourceBackedCandidates = candidates.filter((item) => Boolean(item.installCommand) && !['fallback', 'template'].includes(item.sourceType as string));
   const best = sourceBackedCandidates[0] ?? null;
 
   return {

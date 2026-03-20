@@ -284,36 +284,7 @@ export async function getPlatformReadiness() {
 }
 
 
-export type Win32InstallerType = 'exe' | 'msi' | 'msix' | 'zip';
-export type Win32ExportReadiness = 'ready' | 'partial' | 'research-needed';
-
-export interface Win32OfficialDocsRecord {
-  url: string;
-  title: string;
-  installNotes: string[];
-  uninstallNotes: string[];
-  silentSwitches: string[];
-  detectionHints: string[];
-}
-
-export interface Win32GithubAssetRecord {
-  name: string;
-  url: string;
-  type?: Win32InstallerType;
-  architecture?: 'x64' | 'x86' | 'arm64' | 'unknown';
-}
-
-export interface Win32GithubReleaseRecord {
-  repoUrl: string;
-  tag?: string;
-  version?: string;
-  releaseUrl?: string;
-  publishedAt?: string;
-  assets: Win32GithubAssetRecord[];
-}
-
 export interface Win32ResolvedMatch {
-  id?: string;
   name: string;
   publisher: string;
   packageId?: string;
@@ -329,13 +300,12 @@ export interface Win32ResolvedMatch {
   evidence: string[];
   whySelected: string;
   installerUrl?: string;
-  installerType?: Win32InstallerType;
+  installerType?: 'exe' | 'msi' | 'msix' | 'zip' | 'unknown';
   downloadPageUrl?: string;
-  isDirectDownload?: boolean;
   version?: string;
-  exportReadiness?: Win32ExportReadiness;
-  officialDocs?: Win32OfficialDocsRecord;
-  githubRelease?: Win32GithubReleaseRecord;
+  docsUrl?: string;
+  releaseUrl?: string;
+  exportReadiness?: 'ready' | 'partial' | 'research-needed';
 }
 
 export interface Win32AlternativeRecord {
