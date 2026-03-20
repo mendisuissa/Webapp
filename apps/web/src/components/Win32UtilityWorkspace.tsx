@@ -4,6 +4,7 @@ import {
   resolveWin32Package,
   type Win32AlternativeRecord,
   type Win32CandidateRecord,
+  type Win32ExportReadiness,
   type Win32ResolveResponse,
   type Win32ResolvedMatch
 } from '../api/client.js';
@@ -22,6 +23,10 @@ type NoticeTone = 'info' | 'success' | 'warn';
 type SourceFilter = 'all' | 'winget' | 'chocolatey' | 'silentinstallhq' | 'vendor' | 'github' | 'officialdocs';
 type ConfidenceFilter = 'all' | 'high' | 'medium' | 'low';
 
+type Win32UtilityWorkspaceProps = {
+  onToast?: (tone: 'info' | 'success' | 'warn' | 'error', text: string) => void;
+};
+
 const sourceLabel: Record<string, string> = {
   winget: 'WinGet',
   chocolatey: 'Chocolatey',
@@ -34,14 +39,20 @@ const sourceLabel: Record<string, string> = {
 };
 
 const sourcePriority: Record<string, number> = {
-  winget: 1,
-  chocolatey: 2,
-  officialdocs: 3,
+  officialdocs: 1,
+  winget: 2,
+  chocolatey: 3,
   github: 4,
   silentinstallhq: 5,
   vendor: 6,
   fallback: 7,
   template: 8
+};
+
+const readinessLabel: Record<Win32ExportReadiness, string> = {
+  ready: 'Ready',
+  partial: 'Partial',
+  'research-needed': 'Research needed'
 };
 
 function copyToClipboard(value: string) {
@@ -64,13 +75,18 @@ function triggerBlobDownload(blob: Blob, filename: string) {
 function downloadNotes(payload: Win32ResolveResponse, selected: Win32ResolvedMatch | null) {
   if (typeof window === 'undefined' || !selected) return;
   const m = selected;
+  const confidenceReasons = m.confidenceReasons?.length ? m.confidenceReasons.join('\n- ') : 'N/A';
   const text = [
     `# ${m.name}`,
     '',
     `Publisher: ${m.publisher}`,
     `Source: ${sourceLabel[m.source] ?? m.source}`,
-    `Confidence: ${m.confidence}`,
+    `Confidence: ${m.confidence} (${m.confidenceScore ?? 'n/a'})`,
+    `Export readiness: ${m.exportReadiness ? readinessLabel[m.exportReadiness] : 'N/A'}`,
     `Source URL: ${m.sourceUrl ?? 'N/A'}`,
+    `Installer URL: ${m.installerUrl ?? 'N/A'}`,
+    `Installer type: ${m.installerType ?? 'N/A'}`,
+    `Version: ${m.version ?? 'N/A'}`,
     '',
     '## Install command',
     m.installCommand,
@@ -83,6 +99,9 @@ function downloadNotes(payload: Win32ResolveResponse, selected: Win32ResolvedMat
     '',
     '## Why selected',
     m.whySelected,
+    '',
+    '## Confidence reasons',
+    `- ${confidenceReasons}`,
     '',
     '## Evidence',
     ...m.evidence.map((item) => `- ${item}`),
@@ -113,12 +132,34 @@ function AlternativeCard({ item }: { item: Win32AlternativeRecord }) {
 
 function scoreReason(item: Win32ResolvedMatch) {
   const reasons = [
+    item.confidenceScore ? `score ${item.confidenceScore}` : null,
     `${sourceLabel[item.source] ?? item.source} metadata available`,
-    `${item.confidence} confidence`,
+    item.installerType ? `${item.installerType.toUpperCase()} installer detected` : null,
+    item.exportReadiness ? `${readinessLabel[item.exportReadiness]} export readiness` : null,
     item.packageId ? 'package identifier present' : 'title-based matching',
-    item.installCommand ? 'export-ready install command' : 'requires command validation'
-  ];
+    item.installCommand ? 'install command available' : 'requires command validation'
+  ].filter(Boolean);
   return reasons.join(' • ');
+}
+
+function hasSourceBackedInstall(match: Win32ResolvedMatch | null | undefined): boolean {
+  if (!match) return false;
+  const source = String(match.source || '').toLowerCase();
+  const install = String(match.installCommand || '').trim();
+  const installerUrl = String(match.installerUrl || '').trim();
+  return (Boolean(install) || Boolean(installerUrl)) && !['fallback', 'template'].includes(source);
+}
+
+function chooseBestMatch(payload: Win32ResolveResponse, preferredId: string | null): Win32ResolvedMatch | null {
+  const source = payload.bestMatch;
+  const candidates = payload.candidates ?? [];
+  if (preferredId) {
+    const fromCandidates = candidates.find((item) => getCandidateKey(item) === preferredId);
+    if (fromCandidates) return fromCandidates;
+    if (getResolvedKey(source) === preferredId) return source;
+  }
+  if (source) return source;
+  return candidates.find((item) => hasSourceBackedInstall(item)) ?? candidates[0] ?? null;
 }
 
 function CandidateCard({
@@ -147,40 +188,21 @@ function CandidateCard({
       <div className="hero-chips wrap" style={{ marginTop: '10px' }}>
         <span className="hero-chip">{sourceLabel[item.source] ?? item.source}</span>
         <span className={`hero-chip subtle win32-confidence-${item.confidence}`}>{item.confidence} confidence</span>
-        {item.packageId ? <span className="hero-chip subtle">{item.packageId}</span> : null}
+        {item.confidenceScore ? <span className="hero-chip subtle">Score {item.confidenceScore}</span> : null}
+        {item.installerType ? <span className="hero-chip subtle">{item.installerType.toUpperCase()}</span> : null}
+        {item.version ? <span className="hero-chip subtle">{item.version}</span> : null}
+        {item.exportReadiness ? <span className={`hero-chip subtle win32-readiness-${item.exportReadiness}`}>{readinessLabel[item.exportReadiness]}</span> : null}
       </div>
       <div className="win32-choice-reason">{item.whySelected}</div>
       <div className="win32-choice-proof">{scoreReason(item)}</div>
+      {item.confidenceReasons?.length ? <div className="win32-confidence-list">{item.confidenceReasons.join(' • ')}</div> : null}
       <div className="win32-choice-footer">
-        <span>{item.installCommand ? 'Export-ready' : 'Needs validation'}</span>
+        <span>{item.installerUrl ? 'Installer link available' : item.installCommand ? 'Command available' : 'Needs validation'}</span>
         <span className="btn btn-secondary tiny">Select package</span>
       </div>
     </button>
   );
 }
-
-function hasSourceBackedInstall(match: Win32ResolvedMatch | null | undefined): boolean {
-  if (!match) return false;
-  const source = String(match.source || '').toLowerCase();
-  const install = String(match.installCommand || '').trim();
-  return Boolean(install) && !['fallback', 'template'].includes(source);
-}
-
-function chooseBestMatch(payload: Win32ResolveResponse, preferredId: string | null): Win32ResolvedMatch | null {
-  const source = payload.bestMatch;
-  const candidates = payload.candidates ?? [];
-  if (preferredId) {
-    const fromCandidates = candidates.find((item) => getCandidateKey(item) === preferredId);
-    if (fromCandidates) return fromCandidates;
-    if (getResolvedKey(source) === preferredId) return source;
-  }
-  if (source) return source;
-  return candidates.find((item) => hasSourceBackedInstall(item)) ?? candidates[0] ?? null;
-}
-
-type Win32UtilityWorkspaceProps = {
-  onToast?: (tone: 'info' | 'success' | 'warn' | 'error', text: string) => void;
-};
 
 export default function Win32UtilityWorkspace({ onToast }: Win32UtilityWorkspaceProps) {
   const [query, setQuery] = useState('Google Chrome');
@@ -200,11 +222,11 @@ export default function Win32UtilityWorkspace({ onToast }: Win32UtilityWorkspace
     return [...candidates]
       .filter((item) => (sourceFilter === 'all' ? true : item.source === sourceFilter))
       .filter((item) => (confidenceFilter === 'all' ? true : item.confidence === confidenceFilter))
-      .filter((item) => (onlyReady ? hasSourceBackedInstall(item) : true))
+      .filter((item) => (onlyReady ? item.exportReadiness === 'ready' : true))
       .sort((a, b) => {
         const priorityDiff = (sourcePriority[a.source] ?? 99) - (sourcePriority[b.source] ?? 99);
         if (priorityDiff !== 0) return priorityDiff;
-        return a.name.localeCompare(b.name);
+        return (b.confidenceScore ?? 0) - (a.confidenceScore ?? 0) || a.name.localeCompare(b.name);
       });
   }, [candidates, sourceFilter, confidenceFilter, onlyReady]);
 
@@ -233,9 +255,12 @@ export default function Win32UtilityWorkspace({ onToast }: Win32UtilityWorkspace
       setResult(payload);
       const defaultBest = chooseBestMatch(payload, null);
       setSelectedCandidateId(getResolvedKey(defaultBest));
+      onToast?.('success', payload.ok ? `Resolved ${trimmed}` : `No source-backed package found for ${trimmed}`);
     } catch (err) {
       setResult(null);
-      setError(err instanceof Error ? err.message : 'Failed to resolve package.');
+      const message = err instanceof Error ? err.message : 'Failed to resolve package.';
+      setError(message);
+      onToast?.('error', message);
     } finally {
       setLoading(false);
     }
@@ -252,7 +277,7 @@ export default function Win32UtilityWorkspace({ onToast }: Win32UtilityWorkspace
       return;
     }
     if (!hasSourceBackedInstall(best)) {
-      setError('Download is available only after selecting a source-backed package with a valid install command.');
+      setError('Download is available only after selecting a source-backed package with a valid install command or installer link.');
       return;
     }
 
@@ -266,14 +291,22 @@ export default function Win32UtilityWorkspace({ onToast }: Win32UtilityWorkspace
         uninstallCommand: best.uninstallCommand,
         detectScript: best.detectScript,
         source: best.source,
-        sourceUrl: best.sourceUrl,
-        confidence: best.confidence,
-        notes: best.notes ?? []
+        sourceUrl: best.installerUrl ?? best.sourceUrl,
+        confidence: best.confidenceScore ?? best.confidence,
+        notes: [
+          ...(best.notes ?? []),
+          ...(best.installerUrl ? [`Installer URL: ${best.installerUrl}`] : []),
+          ...(best.downloadPageUrl ? [`Download page: ${best.downloadPageUrl}`] : []),
+          ...(best.confidenceReasons?.length ? [`Confidence reasons: ${best.confidenceReasons.join(' | ')}`] : [])
+        ]
       });
       const safeName = (best.name || 'win32-package').replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase();
       triggerBlobDownload(blob, `${safeName}-intune-package.zip`);
+      onToast?.('success', `Downloaded package folder for ${best.name}`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to build package bundle.');
+      const message = err instanceof Error ? err.message : 'Failed to build package bundle.';
+      setError(message);
+      onToast?.('error', message);
     }
   }
 
@@ -287,7 +320,7 @@ export default function Win32UtilityWorkspace({ onToast }: Win32UtilityWorkspace
           </div>
           <div className="hero-chips wrap align-end">
             <span className="hero-chip">Live sources: WinGet, Chocolatey, Silent Install HQ</span>
-            <span className="hero-chip subtle">Enrichment: vendor docs + GitHub releases</span>
+            <span className="hero-chip subtle">Deep parse: official docs + GitHub releases</span>
             <span className="hero-chip subtle">State: {statusLabel}</span>
           </div>
         </div>
@@ -336,7 +369,7 @@ export default function Win32UtilityWorkspace({ onToast }: Win32UtilityWorkspace
               </button>
             ))}
             <button type="button" className={`segment-btn ${onlyReady ? 'active' : ''}`} onClick={() => setOnlyReady((value) => !value)}>
-              Export-ready only
+              Ready only
             </button>
           </div>
         </div>
@@ -349,7 +382,7 @@ export default function Win32UtilityWorkspace({ onToast }: Win32UtilityWorkspace
       </div>
 
       {error ? <Notice tone="warn">{error}</Notice> : null}
-      {loading ? <Notice tone="info">Looking across live package catalogs, community articles, and enrichment sources for <strong>{query}</strong>.</Notice> : null}
+      {loading ? <Notice tone="info">Looking across live package catalogs, community articles, official docs, and GitHub release assets for <strong>{query}</strong>.</Notice> : null}
 
       {result && !result.ok ? (
         <div className="win32-empty-grid">
@@ -358,8 +391,8 @@ export default function Win32UtilityWorkspace({ onToast }: Win32UtilityWorkspace
             <div className="summary-text">{result.message}</div>
             <div className="readiness-list" style={{ marginTop: '14px' }}>
               <div className="readiness-item"><span>1</span><span>Try a more specific edition name such as Community, Professional, Enterprise, or x64.</span></div>
-              <div className="readiness-item"><span>2</span><span>Use Deep Search to expand Chocolatey, vendor docs, and GitHub release enrichment.</span></div>
-              <div className="readiness-item"><span>3</span><span>Package export stays disabled until a source-backed install command is found.</span></div>
+              <div className="readiness-item"><span>2</span><span>Use Deep Search to expand Chocolatey, official docs, and GitHub release parsing.</span></div>
+              <div className="readiness-item"><span>3</span><span>Package export stays disabled until a source-backed install command or installer URL is found.</span></div>
             </div>
           </div>
           <div className="win32-alt-grid">{(result.alternatives ?? []).map((item) => <AlternativeCard key={item.url} item={item} />)}</div>
@@ -384,7 +417,7 @@ export default function Win32UtilityWorkspace({ onToast }: Win32UtilityWorkspace
                 <div className="detail-row"><div className="detail-key">Query</div><div className="detail-value">{result.query}</div></div>
                 <div className="detail-row"><div className="detail-key">Mode</div><div className="detail-value">{mode === 'deep' ? 'Deep search' : 'Quick search'}</div></div>
                 <div className="detail-row"><div className="detail-key">Source scope</div><div className="detail-value">{sourceFilter === 'all' ? 'All sources' : sourceLabel[sourceFilter]}</div></div>
-                <div className="detail-row"><div className="detail-key">Export gate</div><div className="detail-value">{canDownloadBundle ? 'Ready' : 'Selection required'}</div></div>
+                <div className="detail-row"><div className="detail-key">Export gate</div><div className="detail-value">{best?.exportReadiness ? readinessLabel[best.exportReadiness] : 'Selection required'}</div></div>
               </div>
             </div>
 
@@ -406,7 +439,7 @@ export default function Win32UtilityWorkspace({ onToast }: Win32UtilityWorkspace
                 <div className="win32-card-top">
                   <div>
                     <div className="section-title">Recommended package</div>
-                    <div className="summary-text">Best source-backed match based on source priority, confidence, and package metadata.</div>
+                    <div className="summary-text">Best source-backed match based on source priority, parsed confidence, and packaging evidence.</div>
                   </div>
                   <span className="hero-chip">{sourceLabel[recommended.source] ?? recommended.source}</span>
                 </div>
@@ -418,7 +451,7 @@ export default function Win32UtilityWorkspace({ onToast }: Win32UtilityWorkspace
               <div className="win32-card-top">
                 <div>
                   <div className="section-title">Matching packages</div>
-                  <div className="summary-text">Compare editions, trust signals, and source coverage before you export a package folder.</div>
+                  <div className="summary-text">Compare editions, trust signals, installer links, and source coverage before you export a package folder.</div>
                 </div>
                 <div className="hero-chips wrap">
                   <span className="hero-chip">Source-backed choices</span>
@@ -443,7 +476,7 @@ export default function Win32UtilityWorkspace({ onToast }: Win32UtilityWorkspace
             <Notice tone={canDownloadBundle ? 'success' : 'warn'}>
               {canDownloadBundle
                 ? 'The selected package is source-backed and ready for export as an Intune package folder.'
-                : 'Select an export-ready package with a valid install command before downloading the package folder.'}
+                : 'Select a source-backed package with a valid install command or installer link before downloading the package folder.'}
             </Notice>
 
             {best ? (
@@ -456,18 +489,24 @@ export default function Win32UtilityWorkspace({ onToast }: Win32UtilityWorkspace
                   <div className="hero-chips wrap">
                     <span className="hero-chip">{sourceLabel[best.source] ?? best.source}</span>
                     <span className={`hero-chip subtle win32-confidence-${best.confidence}`}>{best.confidence} confidence</span>
+                    {best.confidenceScore ? <span className="hero-chip subtle">Score {best.confidenceScore}</span> : null}
                   </div>
                 </div>
                 <div className="detail-list">
                   <div className="detail-row"><div className="detail-key">Package ID</div><div className="detail-value">{best.packageId || 'N/A'}</div></div>
-                  <div className="detail-row"><div className="detail-key">Export readiness</div><div className="detail-value">{canDownloadBundle ? 'Ready for export' : 'Needs validation'}</div></div>
+                  <div className="detail-row"><div className="detail-key">Installer</div><div className="detail-value">{best.installerType ? best.installerType.toUpperCase() : 'N/A'}</div></div>
+                  <div className="detail-row"><div className="detail-key">Version</div><div className="detail-value">{best.version || 'N/A'}</div></div>
+                  <div className="detail-row"><div className="detail-key">Export readiness</div><div className="detail-value">{best.exportReadiness ? readinessLabel[best.exportReadiness] : 'Needs validation'}</div></div>
                   <div className="detail-row stack"><div className="detail-key">Why this match</div><div className="detail-value">{best.whySelected}</div></div>
                   <div className="detail-row stack"><div className="detail-key">Confidence reason</div><div className="detail-value">{scoreReason(best)}</div></div>
+                  {best.confidenceReasons?.length ? <div className="detail-row stack"><div className="detail-key">Backend reasoning</div><div className="detail-value">{best.confidenceReasons.join(' • ')}</div></div> : null}
                   <div className="detail-row stack"><div className="detail-key">Evidence</div><div className="detail-value">{best.evidence.join(' • ') || 'N/A'}</div></div>
                 </div>
                 <div className="drawer-actions compact" style={{ marginTop: '12px' }}>
-                  {best.sourceUrl ? <a className="btn btn-secondary" href={best.sourceUrl} target="_blank" rel="noreferrer">Open source</a> : null}
-                  <button className="btn btn-secondary" type="button" onClick={() => copyToClipboard(best.installCommand)}>Copy install</button>
+                  {best.installerUrl ? <a className="btn btn-secondary" href={best.installerUrl} target="_blank" rel="noreferrer">Open installer</a> : null}
+                  {best.downloadPageUrl ? <a className="btn btn-secondary" href={best.downloadPageUrl} target="_blank" rel="noreferrer">Open vendor page</a> : null}
+                  {best.officialDocs?.url ? <a className="btn btn-secondary" href={best.officialDocs.url} target="_blank" rel="noreferrer">Open docs</a> : null}
+                  {best.githubRelease?.releaseUrl ? <a className="btn btn-secondary" href={best.githubRelease.releaseUrl} target="_blank" rel="noreferrer">Open release</a> : null}
                 </div>
               </div>
             ) : null}
@@ -490,6 +529,31 @@ export default function Win32UtilityWorkspace({ onToast }: Win32UtilityWorkspace
                     </div>
                     <pre className="code-surface">{best.uninstallCommand || 'No uninstall command was captured from the selected source.'}</pre>
                   </div>
+                </div>
+              </div>
+            ) : null}
+
+            {best?.officialDocs ? (
+              <div className="info-card drawer-card">
+                <div className="section-title">Official deployment guidance</div>
+                <ul className="plain-list">
+                  {best.officialDocs.installNotes.map((note) => <li key={note}>{note}</li>)}
+                  {best.officialDocs.silentSwitches.map((note) => <li key={note}>Silent switch: {note}</li>)}
+                  {best.officialDocs.detectionHints.map((note) => <li key={note}>Detection hint: {note}</li>)}
+                </ul>
+              </div>
+            ) : null}
+
+            {best?.githubRelease?.assets?.length ? (
+              <div className="info-card drawer-card">
+                <div className="section-title">GitHub release assets</div>
+                <div className="win32-asset-list">
+                  {best.githubRelease.assets.slice(0, 5).map((asset) => (
+                    <a key={asset.url} className="win32-asset-card" href={asset.url} target="_blank" rel="noreferrer">
+                      <div className="win32-asset-name">{asset.name}</div>
+                      <div className="win32-asset-meta">{asset.type ? asset.type.toUpperCase() : 'Asset'} • {asset.architecture ?? 'unknown'}</div>
+                    </a>
+                  ))}
                 </div>
               </div>
             ) : null}

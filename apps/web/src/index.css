@@ -2662,3 +2662,54 @@ textarea::placeholder { color: #68748e; }
     grid-template-columns: 1fr;
   }
 }
+
+.win32-confidence-list {
+  color: var(--muted);
+  font-size: 0.92rem;
+  line-height: 1.55;
+}
+
+.win32-readiness-ready {
+  border-color: rgba(74, 222, 128, 0.28);
+  color: rgba(192, 255, 215, 0.95);
+}
+
+.win32-readiness-partial {
+  border-color: rgba(251, 191, 36, 0.24);
+  color: rgba(255, 236, 180, 0.95);
+}
+
+.win32-readiness-research-needed {
+  border-color: rgba(148, 163, 184, 0.24);
+  color: rgba(219, 230, 247, 0.92);
+}
+
+.win32-asset-list {
+  display: grid;
+  gap: 10px;
+}
+
+.win32-asset-card {
+  display: grid;
+  gap: 4px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(255,255,255,0.08);
+  background: rgba(8, 13, 26, 0.72);
+  text-decoration: none;
+  color: inherit;
+}
+
+.win32-asset-card:hover {
+  border-color: rgba(110, 136, 255, 0.35);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.18);
+}
+
+.win32-asset-name {
+  font-weight: 600;
+}
+
+.win32-asset-meta {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
