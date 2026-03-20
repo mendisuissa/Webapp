@@ -287,8 +287,8 @@ export async function getPlatformReadiness() {
 export interface Win32ResolvedMatch {
   name: string;
   publisher: string;
-  packageId: string;
-  source: 'winget' | 'silentinstallhq' | 'vendor' | 'fallback';
+  packageId?: string;
+  source: 'winget' | 'silentinstallhq' | 'vendor' | 'chocolatey' | 'github' | 'officialdocs' | 'fallback';
   sourceUrl?: string;
   confidence: 'high' | 'medium' | 'low';
   installCommand: string;
@@ -301,7 +301,7 @@ export interface Win32ResolvedMatch {
 
 export interface Win32AlternativeRecord {
   title: string;
-  source: 'winget' | 'silentinstallhq' | 'vendor' | 'fallback';
+  source: 'winget' | 'silentinstallhq' | 'vendor' | 'chocolatey' | 'github' | 'officialdocs' | 'fallback';
   url: string;
   note: string;
 }

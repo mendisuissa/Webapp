@@ -2542,3 +2542,123 @@ textarea::placeholder { color: #68748e; }
     grid-template-columns: 1fr;
   }
 }
+
+.win32-hero-grid {
+  display: grid;
+  gap: 14px;
+}
+
+.win32-toolbar-grid,
+.win32-filter-row,
+.win32-center-stack {
+  display: grid;
+  gap: 10px;
+}
+
+.win32-main-grid.three-col {
+  grid-template-columns: minmax(240px, 0.8fr) minmax(0, 1.4fr) minmax(300px, 0.95fr);
+  align-items: start;
+}
+
+.win32-center-stack {
+  gap: 16px;
+}
+
+.win32-command-stack {
+  display: grid;
+  gap: 12px;
+}
+
+.win32-candidate-grid.upgraded {
+  display: grid;
+  gap: 14px;
+}
+
+.win32-choice-card {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border-radius: 22px;
+  border: 1px solid rgba(255,255,255,0.08);
+  background: rgba(8, 13, 26, 0.9);
+  color: inherit;
+  text-align: left;
+  transition: transform 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
+}
+
+.win32-choice-card:hover {
+  transform: translateY(-1px);
+  border-color: rgba(110, 136, 255, 0.35);
+  box-shadow: 0 20px 45px rgba(0, 0, 0, 0.24);
+}
+
+.win32-choice-card.is-active {
+  border-color: rgba(110, 136, 255, 0.55);
+  box-shadow: 0 0 0 1px rgba(110, 136, 255, 0.2), 0 20px 45px rgba(35, 53, 120, 0.24);
+  background: linear-gradient(180deg, rgba(14, 23, 43, 0.98), rgba(9, 15, 29, 0.96));
+}
+
+.win32-choice-card.is-recommended {
+  position: relative;
+}
+
+.win32-choice-card.is-recommended::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(135deg, rgba(103,126,234,0.45), rgba(74,222,128,0.12));
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+          mask-composite: exclude;
+  pointer-events: none;
+}
+
+.win32-choice-title {
+  font-size: 1.22rem;
+  font-weight: 700;
+}
+
+.win32-choice-meta,
+.win32-choice-proof {
+  color: var(--muted);
+}
+
+.win32-choice-reason {
+  color: rgba(229, 236, 255, 0.92);
+  line-height: 1.55;
+}
+
+.win32-choice-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+
+.btn.tiny {
+  padding: 6px 10px;
+  min-height: auto;
+  font-size: 0.82rem;
+}
+
+.compact-right {
+  justify-content: flex-end;
+}
+
+.align-end {
+  justify-content: flex-end;
+}
+
+.detail-list.compact {
+  gap: 10px;
+}
+
+@media (max-width: 1380px) {
+  .win32-main-grid.three-col {
+    grid-template-columns: 1fr;
+  }
+}
