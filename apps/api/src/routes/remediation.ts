@@ -20,6 +20,10 @@ type RemediationResolution = {
     packageIdentifier?: string;
     wingetId?: string;
     installerType?: string;
+    installerUrl?: string;
+    downloadPageUrl?: string;
+    docsUrl?: string;
+    releaseUrl?: string;
     source?: string;
     confidence?: string;
     displayName?: string;
@@ -106,9 +110,73 @@ function toResolutionFromLive(payload: Win32SearchResponse): RemediationResoluti
       installCommand: best.installCommand,
       uninstallCommand: best.uninstallCommand,
       detectScript: best.detectScript,
+      installerUrl: best.installerUrl,
+      downloadPageUrl: best.downloadPageUrl,
+      docsUrl: best.docsUrl,
+      releaseUrl: best.releaseUrl,
       sourceUrl: best.sourceUrl,
       notes: best.notes
     }
+  };
+}
+
+function mergeResolution(
+  resolved: RemediationResolution,
+  plan: any,
+  finding: any
+): RemediationResolution {
+  const baseApp = resolved.app ?? {};
+  const planApp = plan?.app ?? {};
+  const installerType =
+    planApp.installerType ??
+    baseApp.installerType ??
+    (planApp.wingetId || baseApp.wingetId ? 'winget' : undefined);
+
+  const mergedApp = {
+    ...baseApp,
+    ...planApp,
+    packageIdentifier:
+      planApp.packageIdentifier ??
+      planApp.wingetId ??
+      baseApp.packageIdentifier ??
+      baseApp.wingetId,
+    wingetId: planApp.wingetId ?? baseApp.wingetId,
+    installerType,
+    installerUrl: planApp.installerUrl ?? baseApp.installerUrl,
+    downloadPageUrl: planApp.downloadPageUrl ?? baseApp.downloadPageUrl,
+    docsUrl: planApp.docsUrl ?? baseApp.docsUrl,
+    releaseUrl: planApp.releaseUrl ?? baseApp.releaseUrl,
+    displayName:
+      planApp.displayName ??
+      baseApp.displayName ??
+      finding?.productName ??
+      finding?.softwareName ??
+      'Unknown app',
+    publisher:
+      planApp.publisher ??
+      baseApp.publisher ??
+      finding?.publisher ??
+      'Unknown',
+    installCommand: planApp.installCommand ?? baseApp.installCommand,
+    uninstallCommand: planApp.uninstallCommand ?? baseApp.uninstallCommand,
+    detectScript: planApp.detectScript ?? baseApp.detectScript,
+    sourceUrl: planApp.sourceUrl ?? baseApp.sourceUrl,
+    notes: [
+      ...(Array.isArray(baseApp.notes) ? baseApp.notes : []),
+      ...(Array.isArray(planApp.notes) ? planApp.notes : [])
+    ]
+  };
+
+  return {
+    supported: Boolean(mergedApp.wingetId || mergedApp.installCommand || mergedApp.installerUrl),
+    remediationType:
+      plan?.remediationType ??
+      resolved.remediationType ??
+      (installerType === 'winget' ? 'winget-intune-upgrade' : 'win32-package'),
+    autoRemediate: installerType === 'winget',
+    source: resolved.source ?? 'catalog',
+    app: mergedApp,
+    detail: resolved.detail
   };
 }
 
@@ -161,57 +229,6 @@ exit 1`,
   };
 }
 
-function mergeResolution(resolved: RemediationResolution, plan: any, finding: any): RemediationResolution {
-  const baseApp = resolved.app ?? {};
-  const planApp = plan?.app ?? {};
-
-  const mergedApp = {
-    ...baseApp,
-    ...planApp,
-    packageIdentifier:
-      planApp.packageIdentifier ??
-      planApp.wingetId ??
-      baseApp.packageIdentifier ??
-      baseApp.wingetId,
-    wingetId:
-      planApp.wingetId ??
-      baseApp.wingetId,
-    displayName:
-      planApp.displayName ??
-      baseApp.displayName ??
-      finding?.productName ??
-      finding?.softwareName ??
-      'Unknown app',
-    publisher:
-      planApp.publisher ??
-      baseApp.publisher ??
-      finding?.publisher ??
-      'Unknown',
-    installerType:
-      planApp.installerType ??
-      baseApp.installerType ??
-      (planApp.wingetId ? 'winget' : undefined),
-    notes: [
-      ...(Array.isArray(baseApp.notes) ? baseApp.notes : []),
-      ...(Array.isArray(planApp.notes) ? planApp.notes : [])
-    ]
-  };
-
-  const installerType = mergedApp.installerType ?? 'exe';
-
-  return {
-    supported: Boolean(mergedApp.wingetId || mergedApp.packageIdentifier || mergedApp.installCommand || baseApp.installCommand),
-    remediationType:
-      plan?.remediationType ??
-      resolved.remediationType ??
-      (installerType === 'winget' ? 'winget-intune-upgrade' : 'win32-package'),
-    autoRemediate: installerType === 'winget',
-    source: resolved.source ?? 'catalog',
-    app: mergedApp,
-    detail: resolved.detail
-  };
-}
-
 function buildBundleZip(resolution: RemediationResolution) {
   const app = resolution.app ?? {};
   const appName = String(app.displayName ?? 'RemediationApp').trim();
@@ -250,6 +267,10 @@ function buildBundleZip(resolution: RemediationResolution) {
     `Source: ${app.source ?? 'unknown'}`,
     `Package ID: ${app.packageIdentifier ?? 'n/a'}`,
     `Source URL: ${app.sourceUrl ?? 'n/a'}`,
+    `Installer URL: ${app.installerUrl ?? 'n/a'}`,
+    `Download page: ${app.downloadPageUrl ?? 'n/a'}`,
+    `Docs URL: ${app.docsUrl ?? 'n/a'}`,
+    `Release URL: ${app.releaseUrl ?? 'n/a'}`,
     '',
     'Files included:',
     '- install.ps1',
@@ -372,7 +393,7 @@ router.post('/execute', async (req, res) => {
   const sharedToken = hasValidSharedToken(req);
 
   const resolved = await resolveApplication(finding);
-  const resolution = plan?.app?.wingetId || plan?.app?.installCommand || resolved.app
+  const resolution = plan?.app?.wingetId || plan?.app?.installCommand || plan?.app?.installerUrl
     ? mergeResolution(resolved, plan, finding)
     : resolved;
 
