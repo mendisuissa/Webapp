@@ -34,21 +34,24 @@ type RemediationResolution = {
   source?: 'live-resolver' | 'catalog' | 'none';
 };
 
-function validateSharedToken(req: any, res: any): boolean {
-  const configuredToken = process.env.REMEDIATION_SHARED_TOKEN;
+function getSharedToken(req: any) {
   const authHeader = req.headers.authorization || '';
-
-  if (!configuredToken) return true;
-
-  const incomingToken = authHeader.startsWith('Bearer ')
+  return authHeader.startsWith('Bearer ')
     ? authHeader.slice('Bearer '.length)
     : '';
+}
 
-  if (!incomingToken || incomingToken !== configuredToken) {
+function hasValidSharedToken(req: any): boolean {
+  const configuredToken = process.env.REMEDIATION_SHARED_TOKEN;
+  if (!configuredToken) return true;
+  return getSharedToken(req) === configuredToken;
+}
+
+function validateSharedToken(req: any, res: any): boolean {
+  if (!hasValidSharedToken(req)) {
     res.status(401).json({ ok: false, error: 'Unauthorized remediation request.' });
     return false;
   }
-
   return true;
 }
 
@@ -235,12 +238,19 @@ function getBaseUrl(req: any) {
 }
 
 async function callSelfApi(req: any, endpoint: string, body: Record<string, unknown>) {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json'
+  };
+
+  const cookie = String(req.headers.cookie || '');
+  if (cookie) headers.cookie = cookie;
+
+  const sharedToken = getSharedToken(req);
+  if (sharedToken) headers.authorization = `Bearer ${sharedToken}`;
+
   const response = await fetch(`${getBaseUrl(req)}${endpoint}`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      cookie: String(req.headers.cookie || '')
-    },
+    headers,
     body: JSON.stringify(body)
   });
 
@@ -259,8 +269,14 @@ async function callSelfApi(req: any, endpoint: string, body: Record<string, unkn
   };
 }
 
-router.get('/health', (_req, res) => {
-  res.json({ ok: true, service: 'webapp-remediation-executor', bundleRoot });
+router.get('/health', (req, res) => {
+  res.json({
+    ok: true,
+    service: 'webapp-remediation-executor',
+    bundleRoot,
+    sharedTokenConfigured: !!process.env.REMEDIATION_SHARED_TOKEN,
+    sharedTokenAccepted: hasValidSharedToken(req)
+  });
 });
 
 router.get('/bundles/:fileName', async (req, res) => {
@@ -289,6 +305,10 @@ router.post('/resolve', async (req, res) => {
       category: finding.category || null,
       severity: finding.severity || null
     },
+    connection: {
+      mode: (req as any).session?.accessToken ? 'session' : hasValidSharedToken(req) ? 'shared-token' : 'none',
+      executable: !!(req as any).session?.accessToken || hasValidSharedToken(req)
+    },
     resolution
   });
 });
@@ -298,6 +318,7 @@ router.post('/execute', async (req, res) => {
 
   const { tenantId, approvalId, devices = [], finding = {}, plan = {} } = req.body || {};
   const accessToken = (req as any).session?.accessToken as string | undefined;
+  const sharedToken = hasValidSharedToken(req);
 
   const resolution = plan?.app?.wingetId || plan?.app?.installCommand
     ? {
@@ -350,6 +371,36 @@ router.post('/execute', async (req, res) => {
         }
       });
     }
+
+    const bundleInfo = await writeBundle(jobId, resolution);
+    return res.status(202).json({
+      ok: true,
+      jobId,
+      status: 'bundle-created',
+      executor: 'webapp',
+      mode: 'bundle-fallback',
+      tenantId: tenantId || null,
+      approvalId: approvalId || null,
+      targets: devices,
+      app: resolution.app,
+      liveError: live.payload,
+      connection: {
+        mode: accessToken ? 'session' : sharedToken ? 'shared-token' : 'none',
+        liveWingetAvailable: !!accessToken,
+        reason: 'Live WinGet Intune execution requires an interactive Webapp session. Falling back to bundle generation.'
+      },
+      bundle: bundleInfo,
+      execution: {
+        type: resolution.remediationType,
+        nextStep: 'Bundle created because live Intune winget execution was not available from the current connection context.'
+      },
+      sourceFinding: {
+        cveId: finding.cveId || null,
+        productName: finding.productName || finding.softwareName || null,
+        publisher: finding.publisher || null,
+        recommendation: finding.recommendation || null
+      }
+    });
   }
 
   const bundle = await writeBundle(jobId, resolution);
@@ -363,6 +414,10 @@ router.post('/execute', async (req, res) => {
     approvalId: approvalId || null,
     targets: devices,
     app: resolution.app,
+    connection: {
+      mode: accessToken ? 'session' : sharedToken ? 'shared-token' : 'none',
+      liveWingetAvailable: !!accessToken
+    },
     bundle: {
       fileName: bundle.fileName,
       downloadPath: `/api/remediation/bundles/${encodeURIComponent(bundle.fileName)}`
