@@ -817,7 +817,7 @@ function inferAppMetadata(app: any, statusCount: number, failedCount: number) {
 function buildAppsGrid(data: Awaited<ReturnType<typeof getViewData>>) {
   return data.apps.map((app) => {
     const statuses = (data.statuses as any[]).filter((status) => status.appId === app.id);
-    const failedCount = statuses.filter((status) => String(status.installState ?? '').includes('fail')).length;
+    const failedCount = statuses.filter((status) => String(status.installState ?? '').toLowerCase().includes('fail')).length;
     const inferred = inferAppMetadata(app, statuses.length, failedCount);
 
     return {

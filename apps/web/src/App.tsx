@@ -236,6 +236,7 @@ export default function App() {
   const [currentView, setCurrentView] = useState<ViewName>('dashboard');
   const [rows, setRows] = useState<Row[]>([]);
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
+  const [selectedRowId, setSelectedRowId] = useState<string>('');
   const [statusMessage, setStatusMessage] = useState('Ready');
   const [detailsSummary, setDetailsSummary] = useState('Select a row to view details.');
   const [detailsText, setDetailsText] = useState('');
@@ -318,9 +319,13 @@ export default function App() {
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
 
   const selectedRow = useMemo<Row | null>(() => {
+    if (selectedRowId) {
+      const byId = rows.find((row) => String(row.id ?? '') === selectedRowId);
+      if (byId) return byId;
+    }
     if (selectedIndex === null) return null;
     return rows[selectedIndex] ?? null;
-  }, [selectedIndex, rows]);
+  }, [selectedIndex, selectedRowId, rows]);
 
   const currentViewMeta = useMemo(() => views.find((v) => v.id === currentView) ?? views[0], [currentView]);
 
@@ -562,6 +567,7 @@ exit 1`,
       setRows(safeRows);
       const nextIndex = safeRows.length > 0 ? 0 : null;
       setSelectedIndex(nextIndex);
+      setSelectedRowId(nextIndex !== null ? String(safeRows[nextIndex]?.id ?? '') : '');
       setStatusMessage(result.message || `${view} loaded.`);
 
       if (safeRows.length === 0) {
@@ -575,6 +581,7 @@ exit 1`,
     } catch (error) {
       setRows([]);
       setSelectedIndex(null);
+      setSelectedRowId('');
       setStatusMessage(error instanceof Error ? error.message : 'Failed to load view.');
     }
   }
@@ -598,13 +605,11 @@ exit 1`,
   }, [auth.connected, auth.mockMode, currentView]);
 
   useEffect(() => {
-    if (selectedIndex === null) return;
-    const row = rows[selectedIndex];
-    if (!row) return;
+    if (!selectedRow) return;
 
-    setDetailsSummary(currentView === 'apps' ? getAppDisplayLabel(row) : toText(row['name'] ?? row['deviceName'] ?? row['displayName'] ?? row['appName'] ?? 'Row selected'));
-    setDetailsText(toText(row['details'] ?? row));
-  }, [selectedIndex, rows]);
+    setDetailsSummary(currentView === 'apps' ? getAppDisplayLabel(selectedRow) : toText(selectedRow['name'] ?? selectedRow['deviceName'] ?? selectedRow['displayName'] ?? selectedRow['appName'] ?? 'Row selected'));
+    setDetailsText(toText(selectedRow['details'] ?? selectedRow));
+  }, [currentView, selectedRow]);
 
   useEffect(() => {
     const appId = String(selectedAppRow?.id ?? '').trim();
@@ -1071,6 +1076,7 @@ ${result.note}` : result.message);
     event.preventDefault();
     const actualIndex = rows.findIndex((candidate) => candidate === row);
     setSelectedIndex(actualIndex >= 0 ? actualIndex : 0);
+    setSelectedRowId(String(row.id ?? ''));
     setAppContextMenu({ open: true, x: event.clientX, y: event.clientY, row });
   }
 
@@ -1339,6 +1345,46 @@ ${result.note}` : result.message);
               </div>
             ) : null}
 
+            {currentView !== 'winget' && currentView !== 'ocr' ? (
+              filteredRows.length > 0 ? (
+                <div className="table-shell">
+                  <table className="data-table">
+                    <thead>
+                      <tr>
+                        {visibleHeaders.map((header) => (
+                          <th key={header}>{getHeaderLabel(currentView, header)}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredRows.map((row, index) => {
+                        const actualIndex = rows.findIndex((candidate) => candidate === row);
+                        const isSelected = String(selectedRow?.id ?? '') === String(row.id ?? '');
+
+                        return (
+                          <tr
+                            key={String(row.id ?? `${currentView}-${index}`)}
+                            className={isSelected ? 'selected' : ''}
+                            onClick={() => {
+                              setSelectedIndex(actualIndex >= 0 ? actualIndex : index);
+                              setSelectedRowId(String(row.id ?? ''));
+                            }}
+                            onContextMenu={(event) => onAppRowContextMenu(event, row)}
+                          >
+                            {visibleHeaders.map((header) => (
+                              <td key={header}>{getCellDisplayValue(currentView, row, header)}</td>
+                            ))}
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <div className="empty-state">No rows to display.</div>
+              )
+            ) : null}
+
             {currentView === 'winget' ? (
               <Win32UtilityWorkspace onToast={pushToast} />
             ) : null}
@@ -1355,10 +1401,10 @@ ${result.note}` : result.message);
           </div>
 
           <div className="right-actions">
-            <button className="btn btn-ai" onClick={() => setAiPanel({ open: true, action: 'explain', row: selectedRow })} disabled={!canUseApp || selectedIndex === null} type="button">
+            <button className="btn btn-ai" onClick={() => setAiPanel({ open: true, action: 'explain', row: selectedRow })} disabled={!canUseApp || !selectedRow} type="button">
               Ask Intune Architect AI
             </button>
-            <button className="btn btn-runbook" onClick={() => setAiPanel({ open: true, action: 'runbook', row: selectedRow })} disabled={!canUseApp || selectedIndex === null} type="button">
+            <button className="btn btn-runbook" onClick={() => setAiPanel({ open: true, action: 'runbook', row: selectedRow })} disabled={!canUseApp || !selectedRow} type="button">
               Runbook
             </button>
           </div>

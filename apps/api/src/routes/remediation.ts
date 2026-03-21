@@ -161,6 +161,57 @@ exit 1`,
   };
 }
 
+function mergeResolution(resolved: RemediationResolution, plan: any, finding: any): RemediationResolution {
+  const baseApp = resolved.app ?? {};
+  const planApp = plan?.app ?? {};
+
+  const mergedApp = {
+    ...baseApp,
+    ...planApp,
+    packageIdentifier:
+      planApp.packageIdentifier ??
+      planApp.wingetId ??
+      baseApp.packageIdentifier ??
+      baseApp.wingetId,
+    wingetId:
+      planApp.wingetId ??
+      baseApp.wingetId,
+    displayName:
+      planApp.displayName ??
+      baseApp.displayName ??
+      finding?.productName ??
+      finding?.softwareName ??
+      'Unknown app',
+    publisher:
+      planApp.publisher ??
+      baseApp.publisher ??
+      finding?.publisher ??
+      'Unknown',
+    installerType:
+      planApp.installerType ??
+      baseApp.installerType ??
+      (planApp.wingetId ? 'winget' : undefined),
+    notes: [
+      ...(Array.isArray(baseApp.notes) ? baseApp.notes : []),
+      ...(Array.isArray(planApp.notes) ? planApp.notes : [])
+    ]
+  };
+
+  const installerType = mergedApp.installerType ?? 'exe';
+
+  return {
+    supported: Boolean(mergedApp.wingetId || mergedApp.packageIdentifier || mergedApp.installCommand || baseApp.installCommand),
+    remediationType:
+      plan?.remediationType ??
+      resolved.remediationType ??
+      (installerType === 'winget' ? 'winget-intune-upgrade' : 'win32-package'),
+    autoRemediate: installerType === 'winget',
+    source: resolved.source ?? 'catalog',
+    app: mergedApp,
+    detail: resolved.detail
+  };
+}
+
 function buildBundleZip(resolution: RemediationResolution) {
   const app = resolution.app ?? {};
   const appName = String(app.displayName ?? 'RemediationApp').trim();
@@ -320,15 +371,10 @@ router.post('/execute', async (req, res) => {
   const accessToken = (req as any).session?.accessToken as string | undefined;
   const sharedToken = hasValidSharedToken(req);
 
-  const resolution = plan?.app?.wingetId || plan?.app?.installCommand
-    ? {
-        supported: true,
-        remediationType: plan.remediationType || (plan?.app?.installerType === 'winget' ? 'winget-intune-upgrade' : 'win32-package'),
-        autoRemediate: plan?.app?.installerType === 'winget',
-        source: 'live-resolver' as const,
-        app: plan.app
-      }
-    : await resolveApplication(finding);
+  const resolved = await resolveApplication(finding);
+  const resolution = plan?.app?.wingetId || plan?.app?.installCommand || resolved.app
+    ? mergeResolution(resolved, plan, finding)
+    : resolved;
 
   if (!resolution.supported || !resolution.app) {
     return res.status(400).json({
@@ -389,7 +435,10 @@ router.post('/execute', async (req, res) => {
         liveWingetAvailable: !!accessToken,
         reason: 'Live WinGet Intune execution requires an interactive Webapp session. Falling back to bundle generation.'
       },
-      bundle: bundleInfo,
+      bundle: {
+        fileName: bundleInfo.fileName,
+        downloadPath: `/api/remediation/bundles/${encodeURIComponent(bundleInfo.fileName)}`
+      },
       execution: {
         type: resolution.remediationType,
         nextStep: 'Bundle created because live Intune winget execution was not available from the current connection context.'
