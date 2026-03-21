@@ -260,8 +260,8 @@ app.get('/api/diag', (req, res) => {
 
 // ✅ API routers (must be after session)
 app.use('/api/auth', authRouter);
-app.use('/api/remediation', remediationRouter);
 app.use('/api', apiRouter);
+app.use('/api/remediation', remediationRouter);
 
 // ✅ SPA fallback (prod only) — keep AFTER /api mounts
 if (isProduction) {
