@@ -134,6 +134,19 @@ function chooseBestMatch(payload: Win32ResolveResponse, preferredId: string | nu
     if (fromCandidates) return fromCandidates;
     if (getResolvedKey(source) === preferredId) return source;
   }
+
+  const installerBacked = [...candidates]
+    .filter((item) => Boolean(item.installerUrl || item.downloadPageUrl))
+    .sort((a, b) => {
+      const scoreDiff = (b.confidenceScore ?? 0) - (a.confidenceScore ?? 0);
+      if (scoreDiff !== 0) return scoreDiff;
+      return (sourcePriority[a.source] ?? 99) - (sourcePriority[b.source] ?? 99);
+    });
+
+  if (source && (source.installerUrl || source.downloadPageUrl || hasSourceBackedInstall(source))) {
+    return source;
+  }
+  if (installerBacked.length) return installerBacked[0];
   if (source) return source;
   return candidates.find((item) => hasSourceBackedInstall(item)) ?? candidates[0] ?? null;
 }
@@ -445,6 +458,7 @@ export default function Win32UtilityWorkspace({ onToast }: Win32UtilityWorkspace
                   <div>
                     <div className="section-title">Selection panel</div>
                     <div className="summary-text">{best.name}</div>
+                    {best.installerUrl ? <div className="panel-caption">Direct EXE/MSI link detected for this selection.</div> : null}
                   </div>
                   <div className="hero-chips wrap">
                     <span className="hero-chip">{sourceLabel[best.source] ?? best.source}</span>
@@ -454,11 +468,15 @@ export default function Win32UtilityWorkspace({ onToast }: Win32UtilityWorkspace
                 <div className="detail-list compact">
                   <div className="detail-row"><div className="detail-key">Package ID</div><div className="detail-value">{best.packageId || 'N/A'}</div></div>
                   <div className="detail-row"><div className="detail-key">Installer</div><div className="detail-value">{best.installerType ? best.installerType.toUpperCase() : 'N/A'}</div></div>
+                  <div className="detail-row stack"><div className="detail-key">Direct installer URL</div><div className="detail-value code">{best.installerUrl ?? 'N/A'}</div></div>
+                  <div className="detail-row stack"><div className="detail-key">Vendor page</div><div className="detail-value code">{best.downloadPageUrl ?? 'N/A'}</div></div>
                   <div className="detail-row"><div className="detail-key">Version</div><div className="detail-value">{best.version || 'N/A'}</div></div>
                   <div className="detail-row"><div className="detail-key">Export readiness</div><div className="detail-value">{readinessLabel(best.exportReadiness)}</div></div>
                   <div className="detail-row stack"><div className="detail-key">Why this match</div><div className="detail-value">{best.whySelected}</div></div>
                   <div className="detail-row stack"><div className="detail-key">Confidence reasons</div><div className="detail-value">{scoreReason(best)}</div></div>
                   <div className="detail-row stack"><div className="detail-key">Evidence</div><div className="detail-value">{best.evidence.join(' • ') || 'N/A'}</div></div>
+                  <div className="detail-row stack"><div className="detail-key">Docs URL</div><div className="detail-value code">{best.docsUrl ?? 'N/A'}</div></div>
+                  <div className="detail-row stack"><div className="detail-key">Release URL</div><div className="detail-value code">{best.releaseUrl ?? 'N/A'}</div></div>
                 </div>
                 <div className="drawer-actions compact compact-actions" style={{ marginTop: '12px' }}>
                   {best.installerUrl ? <a className="btn btn-primary" href={best.installerUrl} target="_blank" rel="noreferrer">Open installer</a> : null}

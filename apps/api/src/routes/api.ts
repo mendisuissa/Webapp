@@ -1401,6 +1401,81 @@ apiRouter.post('/ocr/explain', async (req: Request, res: Response) => {
   }
 });
 
+
+apiRouter.get('/dashboard/impact', async (req: Request, res: Response) => {
+  const accessToken = (req as any).session?.accessToken as string | undefined;
+
+  try {
+    const data = await getViewData(accessToken);
+    return res.json(buildDashboard(data));
+  } catch (error) {
+    return res.status(500).json({
+      impactSummary: 'Failed to load dashboard impact.',
+      remediationQueue: [],
+      appsNeedingAttention: [],
+      valueProof: {},
+      smartSummary: null,
+      insights: [],
+      message: error instanceof Error ? error.message : 'Failed to load dashboard impact.'
+    });
+  }
+});
+
+apiRouter.get('/apps/:id/audit', async (req: Request, res: Response) => {
+  const appId = String(req.params.id ?? '').trim();
+  const accessToken = (req as any).session?.accessToken as string | undefined;
+
+  if (!appId) return res.status(400).json({ message: 'Missing app ID.' });
+
+  try {
+    const data = await getViewData(accessToken);
+    const app = data.apps.find((candidate) => candidate.id === appId);
+    if (!app) return res.status(404).json({ message: 'App not found.' });
+    return res.json(buildAppAudit(appId, data));
+  } catch (error) {
+    return res.status(500).json({ message: error instanceof Error ? error.message : 'Failed to load app audit.' });
+  }
+});
+
+apiRouter.get('/apps/:id', async (req: Request, res: Response) => {
+  const appId = String(req.params.id ?? '').trim();
+  const accessToken = (req as any).session?.accessToken as string | undefined;
+
+  if (!appId) return res.status(400).json({ message: 'Missing app ID.' });
+
+  try {
+    const data = await getViewData(accessToken);
+    const app = data.apps.find((candidate) => candidate.id === appId);
+    const statusRows = (data.statuses as any[]).filter((status) => status.appId === appId);
+    const failedCount = statusRows.filter((status) => String(status.installState ?? '').toLowerCase().includes('fail')).length;
+
+    if (config.mockMode || !accessToken) {
+      if (!app) return res.status(404).json({ message: 'App not found.' });
+      return res.json({
+        id: app.id,
+        name: app.displayName,
+        publisher: app.publisher,
+        platform: app.platform,
+        assignmentCount: statusRows.length,
+        assignmentTargets: [],
+        installIntentSummary: failedCount > 0 ? 'required' : 'available',
+        ...inferAppMetadata(app, statusRows.length, failedCount),
+        details: `App: ${app.displayName}
+Publisher: ${app.publisher}
+Platform: ${app.platform}`
+      });
+    }
+
+    const live = await getLiveAppDetails(accessToken, appId, app?.displayName ?? '');
+    return res.json({
+      ...inferAppMetadata(app ?? live, statusRows.length || live.assignmentCount, failedCount),
+      ...live
+    });
+  } catch (error) {
+    return res.status(500).json({ message: error instanceof Error ? error.message : 'Failed to load app details.' });
+  }
+});
+
 apiRouter.get('/apps/:id/details', async (req: Request, res: Response) => {
   const appId = String(req.params.id ?? '').trim();
   const accessToken = (req as any).session?.accessToken as string | undefined;
