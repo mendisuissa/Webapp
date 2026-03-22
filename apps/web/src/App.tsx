@@ -501,6 +501,17 @@ exit 1`,
   }, [currentView]);
 
   useEffect(() => {
+    if (currentView !== 'apps') return;
+    if (filteredRows.length === 0) {
+      if (selectedIndex !== null) setSelectedIndex(null);
+      return;
+    }
+    if (selectedIndex === null || selectedIndex >= filteredRows.length) {
+      setSelectedIndex(0);
+    }
+  }, [currentView, filteredRows, selectedIndex]);
+
+  useEffect(() => {
     if (!appContextMenu.open) return;
 
     const close = () => setAppContextMenu((prev) => ({ ...prev, open: false }));
@@ -600,13 +611,15 @@ exit 1`,
   }, [auth.connected, auth.mockMode, currentView]);
 
   useEffect(() => {
-    if (selectedIndex === null) return;
-    const row = rows[selectedIndex];
-    if (!row) return;
+    if (!selectedRow) return;
 
-    setDetailsSummary(currentView === 'apps' ? getAppDisplayLabel(row) : toText(row['name'] ?? row['deviceName'] ?? row['displayName'] ?? row['appName'] ?? 'Row selected'));
-    setDetailsText(toText(row['details'] ?? row));
-  }, [selectedIndex, rows]);
+    setDetailsSummary(
+      currentView === 'apps'
+        ? getAppDisplayLabel(selectedRow)
+        : toText(selectedRow['name'] ?? selectedRow['deviceName'] ?? selectedRow['displayName'] ?? selectedRow['appName'] ?? 'Row selected')
+    );
+    setDetailsText(toText(selectedRow['details'] ?? selectedRow));
+  }, [currentView, selectedRow]);
 
   useEffect(() => {
     const appId = String(selectedAppRow?.id ?? '').trim();
@@ -1339,6 +1352,42 @@ ${result.note}` : result.message);
                   })}
                 </div>
               </div>
+            ) : null}
+
+            {currentView !== 'winget' ? (
+              filteredRows.length > 0 ? (
+                <div className="table-shell">
+                  <table className="data-table">
+                    <thead>
+                      <tr>
+                        {visibleHeaders.map((header) => (
+                          <th key={header}>{getHeaderLabel(currentView, header)}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredRows.map((row, index) => {
+                        const actualIndex = currentView === 'apps' ? rows.findIndex((candidate) => candidate === row) : index;
+                        const isSelected = selectedIndex === (currentView === 'apps' ? index : actualIndex);
+                        return (
+                          <tr
+                            key={String(row.id ?? `${currentView}-${index}`)}
+                            className={isSelected ? 'is-selected' : ''}
+                            onClick={() => setSelectedIndex(currentView === 'apps' ? index : actualIndex)}
+                            onContextMenu={(event) => onAppRowContextMenu(event, row)}
+                          >
+                            {visibleHeaders.map((header) => (
+                              <td key={header}>{getCellDisplayValue(currentView, row, header)}</td>
+                            ))}
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <div className="empty-state">No rows to display.</div>
+              )
             ) : null}
 
             {currentView === 'winget' ? (
