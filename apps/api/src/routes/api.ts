@@ -16,6 +16,7 @@ import { toCsv } from '../utils/safe.js';
 import { PrismaIncidentRepository } from '../storage/incidentRepository.js';
 import { postIntuneAi } from './intuneAi.js';
 import { getAppAccessToken } from '../auth/msal.js';
+import { deployWinGetToIntune } from '../services/wingetDeploy.js';
 
 const incidentRepo = new PrismaIncidentRepository();
 
@@ -1698,40 +1699,28 @@ apiRouter.post('/winget/deploy', async (req: Request, res: Response) => {
   if (!accessToken) return res.status(401).json({ ok: false, message: 'Not connected. Sign in before creating WinGet apps.' });
 
   try {
-    const app = await createWinGetApp(accessToken, { packageIdentifier, displayName, publisher, runAsAccount, updateMode, icon });
-    const appId = String(app.id ?? '').trim();
-    if (!appId) return res.status(500).json({ ok: false, message: 'WinGet app creation returned no app ID.' });
+    const result = await deployWinGetToIntune(accessToken, {
+      packageIdentifier,
+      displayName,
+      publisher,
+      installIntent,
+      runAsAccount,
+      updateMode,
+      assignNow,
+      targets,
+      icon
+    });
 
-    if (!assignNow || !targets.length) {
-      const publishResult = await waitForMobileAppPublished(accessToken, appId, { timeoutMs: 45000, intervalMs: 4000 });
-      return res.status(publishResult.timedOut ? 202 : 200).json({
-        ok: true,
-        appId,
-        createdAssignments: 0,
-        publishingState: publishResult.publishingState,
-        message: publishResult.timedOut
-          ? `WinGet app ${displayName} was created. Intune is still publishing it, and no assignments were applied yet.`
-          : `WinGet app ${displayName} was created${publishResult.publishingState.toLowerCase() === 'published' ? ' and is published' : ''}. No assignments were applied.`
-      });
+    if (!result.ok) {
+      return res.status(500).json({ ok: false, message: result.message });
     }
 
-    const assignmentResult = await assignTargetsToPublishedApp(accessToken, appId, targets, installIntent);
-    if (assignmentResult.pending) {
-      return res.status(202).json({
-        ok: true,
-        appId,
-        createdAssignments: 0,
-        publishingState: assignmentResult.publishingState,
-        message: `WinGet app ${displayName} was created, but Intune has not finished publishing it yet. Assignments were not applied yet.`
-      });
-    }
-
-    return res.json({
+    return res.status(result.timedOut ? 202 : 200).json({
       ok: true,
-      appId,
-      createdAssignments: assignmentResult.createdAssignments,
-      publishingState: assignmentResult.publishingState,
-      message: `WinGet app ${displayName} was created and assigned to ${assignmentResult.createdAssignments} group(s).`
+      appId: result.appId,
+      createdAssignments: result.createdAssignments,
+      publishingState: result.publishingState,
+      message: result.message
     });
   } catch (error) {
     logger.error({ err: error, packageIdentifier }, 'WinGet deployment failed.');

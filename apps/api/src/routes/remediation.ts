@@ -8,6 +8,7 @@ import { resolveWin32Search, type Win32SearchResponse } from '../engines/win32Li
 import { buildZip } from '../engines/win32Zip.js';
 import { getAppAccessToken } from '../auth/msal.js';
 import { authConfigured } from '../config.js';
+import { deployWinGetToIntune } from '../services/wingetDeploy.js';
 
 const router = Router();
 const currentFilePath = fileURLToPath(import.meta.url);
@@ -429,29 +430,70 @@ router.post('/execute', async (req, res) => {
     }
   }
 
+  // Direct Intune deployment — no loopback HTTP, bypasses ensureConnected
   if (resolution.app.installerType === 'winget' && resolution.app.packageIdentifier && effectiveAccessToken) {
-    const live = await callSelfApi(req, '/api/winget/deploy', {
-      packageIdentifier: resolution.app.packageIdentifier,
-      displayName: resolution.app.displayName || finding.productName || finding.softwareName || resolution.app.packageIdentifier,
-      publisher: resolution.app.publisher || finding.publisher || 'Unknown',
-      assignNow: false,
-      installIntent: 'required',
-      runAsAccount: 'system',
-      updateMode: 'manual',
-      targets: Array.isArray(devices) ? devices : []
-    });
+    try {
+      const normalizedTargets = Array.isArray(devices)
+        ? devices.filter((d: any) => d?.groupId).map((d: any) => ({ groupId: String(d.groupId) }))
+        : [];
 
-    if (live.ok) {
-      return res.json({
+      const deployResult = await deployWinGetToIntune(effectiveAccessToken, {
+        packageIdentifier: resolution.app.packageIdentifier,
+        displayName: resolution.app.displayName || finding.productName || finding.softwareName || resolution.app.packageIdentifier,
+        publisher: resolution.app.publisher || finding.publisher || 'Unknown',
+        installIntent: 'required',
+        runAsAccount: 'system',
+        updateMode: 'manual',
+        assignNow: normalizedTargets.length > 0,
+        targets: normalizedTargets
+      });
+
+      if (deployResult.ok) {
+        return res.json({
+          ok: true,
+          jobId,
+          status: deployResult.timedOut ? 'publishing' : 'executed',
+          executor: 'webapp',
+          mode: 'live-winget-intune',
+          tenantId: tenantId || null,
+          approvalId: approvalId || null,
+          app: resolution.app,
+          live: deployResult,
+          sourceFinding: {
+            cveId: finding.cveId || null,
+            productName: finding.productName || finding.softwareName || null,
+            publisher: finding.publisher || null,
+            recommendation: finding.recommendation || null
+          }
+        });
+      }
+    } catch (deployErr: any) {
+      // Graph API error — fall through to bundle with error info
+      const bundleInfo = await writeBundle(jobId, resolution);
+      return res.status(202).json({
         ok: true,
         jobId,
-        status: live.status === 202 ? 'publishing' : 'executed',
+        status: 'bundle-created',
         executor: 'webapp',
-        mode: 'live-winget-intune',
+        mode: 'bundle-fallback',
         tenantId: tenantId || null,
         approvalId: approvalId || null,
+        targets: devices,
         app: resolution.app,
-        live: live.payload,
+        liveError: deployErr?.message || 'Intune Graph API call failed.',
+        connection: {
+          mode: effectiveAccessToken === accessToken ? 'session' : 'app-credentials',
+          liveWingetAvailable: true,
+          reason: deployErr?.message || 'Live WinGet deployment failed. Check DeviceManagementApps.ReadWrite.All permission and admin consent.'
+        },
+        bundle: {
+          fileName: bundleInfo.fileName,
+          downloadPath: `/api/remediation/bundles/${encodeURIComponent(bundleInfo.fileName)}`
+        },
+        execution: {
+          type: resolution.remediationType,
+          nextStep: 'Intune Graph API call failed. Bundle provided as fallback. Check app permissions in Azure.'
+        },
         sourceFinding: {
           cveId: finding.cveId || null,
           productName: finding.productName || finding.softwareName || null,
@@ -460,55 +502,23 @@ router.post('/execute', async (req, res) => {
         }
       });
     }
-
-    const bundleInfo = await writeBundle(jobId, resolution);
-    return res.status(202).json({
-      ok: true,
-      jobId,
-      status: 'bundle-created',
-      executor: 'webapp',
-      mode: 'bundle-fallback',
-      tenantId: tenantId || null,
-      approvalId: approvalId || null,
-      targets: devices,
-      app: resolution.app,
-      liveError: live.payload,
-      connection: {
-        mode: accessToken ? 'session' : sharedToken ? 'shared-token' : 'none',
-        liveWingetAvailable: !!accessToken,
-        reason: 'Live WinGet Intune execution requires an interactive Webapp session. Falling back to bundle generation.'
-      },
-      bundle: {
-        fileName: bundleInfo.fileName,
-        downloadPath: `/api/remediation/bundles/${encodeURIComponent(bundleInfo.fileName)}`
-      },
-      execution: {
-        type: resolution.remediationType,
-        nextStep: 'Bundle created because live Intune winget execution was not available from the current connection context.'
-      },
-      sourceFinding: {
-        cveId: finding.cveId || null,
-        productName: finding.productName || finding.softwareName || null,
-        publisher: finding.publisher || null,
-        recommendation: finding.recommendation || null
-      }
-    });
   }
 
+  // No access token available or non-winget installer — produce offline bundle
   const bundle = await writeBundle(jobId, resolution);
   return res.status(202).json({
     ok: true,
     jobId,
     status: 'bundle-created',
     executor: 'webapp',
-    mode: accessToken ? 'bundle-fallback' : 'offline-bundle',
+    mode: effectiveAccessToken ? 'bundle-fallback' : 'offline-bundle',
     tenantId: tenantId || null,
     approvalId: approvalId || null,
     targets: devices,
     app: resolution.app,
     connection: {
-      mode: accessToken ? 'session' : sharedToken ? 'shared-token' : 'none',
-      liveWingetAvailable: !!accessToken
+      mode: effectiveAccessToken ? (effectiveAccessToken === accessToken ? 'session' : 'app-credentials') : (sharedToken ? 'shared-token' : 'none'),
+      liveWingetAvailable: !!effectiveAccessToken && resolution.app.installerType === 'winget'
     },
     bundle: {
       fileName: bundle.fileName,
@@ -516,9 +526,11 @@ router.post('/execute', async (req, res) => {
     },
     execution: {
       type: resolution.remediationType,
-      nextStep: accessToken
-        ? 'Bundle created because live Intune winget execution was not available for this installer type.'
-        : 'Bundle created. Sign in to Webapp to enable live WinGet Intune execution for Winget-backed packages.'
+      nextStep: !effectiveAccessToken
+        ? 'No Intune access token available. Ensure ENTRA_* variables are set and DeviceManagementApps.ReadWrite.All Application permission is granted with admin consent.'
+        : resolution.app.installerType !== 'winget'
+          ? 'Non-WinGet installer: bundle created for manual Intune packaging.'
+          : 'Bundle created as fallback.'
     },
     sourceFinding: {
       cveId: finding.cveId || null,
