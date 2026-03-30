@@ -259,9 +259,12 @@ app.get('/api/diag', (req, res) => {
 });
 
 // ✅ API routers (must be after session)
+// NOTE: remediationRouter must be mounted BEFORE apiRouter so that
+// /api/remediation/* is handled by its own token-based auth and is NOT
+// intercepted by the ensureConnected middleware in apiRouter.
 app.use('/api/auth', authRouter);
-app.use('/api', apiRouter);
 app.use('/api/remediation', remediationRouter);
+app.use('/api', apiRouter);
 
 // ✅ SPA fallback (prod only) — keep AFTER /api mounts
 if (isProduction) {
