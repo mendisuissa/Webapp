@@ -6,6 +6,8 @@ import { fileURLToPath } from 'url';
 import { resolveCatalogApp } from '../services/remediationCatalog.js';
 import { resolveWin32Search, type Win32SearchResponse } from '../engines/win32LiveResolver.js';
 import { buildZip } from '../engines/win32Zip.js';
+import { getAppAccessToken } from '../auth/msal.js';
+import { authConfigured } from '../config.js';
 
 const router = Router();
 const currentFilePath = fileURLToPath(import.meta.url);
@@ -407,7 +409,18 @@ router.post('/execute', async (req, res) => {
 
   const jobId = `rem_${crypto.randomBytes(6).toString('hex')}`;
 
-  if (resolution.app.installerType === 'winget' && resolution.app.packageIdentifier && accessToken) {
+  // If no interactive session token, try to obtain one via Client Credentials flow
+  // (requires DeviceManagementApps.ReadWrite.All Application permission + admin consent)
+  let effectiveAccessToken = accessToken;
+  if (!effectiveAccessToken && authConfigured()) {
+    try {
+      effectiveAccessToken = await getAppAccessToken();
+    } catch (tokenErr: any) {
+      // Client credentials not available — will fall through to bundle
+    }
+  }
+
+  if (resolution.app.installerType === 'winget' && resolution.app.packageIdentifier && effectiveAccessToken) {
     const live = await callSelfApi(req, '/api/winget/deploy', {
       packageIdentifier: resolution.app.packageIdentifier,
       displayName: resolution.app.displayName || finding.productName || finding.softwareName || resolution.app.packageIdentifier,

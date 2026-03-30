@@ -20,3 +20,20 @@ export function getMsalApp(): ConfidentialClientApplication {
 
   return app;
 }
+
+/**
+ * Acquire an app-only access token using Client Credentials flow.
+ * Used for server-to-server Graph/Intune calls when no user session is present.
+ * Requires DeviceManagementApps.ReadWrite.All as an Application permission
+ * with admin consent granted on the Azure App Registration.
+ */
+export async function getAppAccessToken(): Promise<string> {
+  const msalApp = getMsalApp();
+  const result = await msalApp.acquireTokenByClientCredential({
+    scopes: ['https://graph.microsoft.com/.default']
+  });
+  if (!result?.accessToken) {
+    throw new Error('Client credentials token acquisition returned no access token.');
+  }
+  return result.accessToken;
+}

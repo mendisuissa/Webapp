@@ -3,7 +3,7 @@ import fs from 'fs/promises';
 import { buildZip } from '../engines/win32Zip.js';
 import { resolveWin32Search, type Win32SearchMode } from '../engines/win32LiveResolver.js';
 import { DashboardData, SettingsData, ViewName } from '@efm/shared';
-import { config } from '../config.js';
+import { config, authConfigured } from '../config.js';
 import { normalizeStatus } from '../engines/normalization.js';
 import { buildIncidents } from '../engines/incidents.js';
 import { buildSmartSummary } from '../engines/smartSummary.js';
@@ -15,6 +15,7 @@ import { logger } from '../utils/logger.js';
 import { toCsv } from '../utils/safe.js';
 import { PrismaIncidentRepository } from '../storage/incidentRepository.js';
 import { postIntuneAi } from './intuneAi.js';
+import { getAppAccessToken } from '../auth/msal.js';
 
 const incidentRepo = new PrismaIncidentRepository();
 
@@ -1661,7 +1662,15 @@ apiRouter.get('/winget/search', async (req: Request, res: Response) => {
 });
 
 apiRouter.post('/winget/deploy', async (req: Request, res: Response) => {
-  const accessToken = (req as any).session?.accessToken as string | undefined;
+  let accessToken = (req as any).session?.accessToken as string | undefined;
+  // Fall back to Client Credentials app token for server-to-server calls (no user session)
+  if (!accessToken && authConfigured()) {
+    try {
+      accessToken = await getAppAccessToken();
+    } catch {
+      // Will be caught by the !accessToken guard below
+    }
+  }
   const packageIdentifier = String(req.body?.packageIdentifier ?? '').trim();
   const displayName = String(req.body?.displayName ?? packageIdentifier).trim();
   const publisher = String(req.body?.publisher ?? packageIdentifier.split('.')[0] ?? 'Unknown').trim();
