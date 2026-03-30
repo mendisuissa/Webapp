@@ -187,9 +187,18 @@ async function resolveApplication(finding: any): Promise<RemediationResolution> 
   const publisher = String(finding?.publisher ?? '').trim();
 
   if (query) {
+    // Quick pass — fast, only checks top candidates without page fetches
     try {
       const payload = await resolveWin32Search(query, 'quick');
       if (payload.bestMatch) return toResolutionFromLive(payload);
+    } catch {
+      // fall through
+    }
+
+    // Deep pass — broader query expansion + package page inspection
+    try {
+      const deepPayload = await resolveWin32Search(query, 'deep');
+      if (deepPayload.bestMatch) return toResolutionFromLive(deepPayload);
     } catch {
       // fall through to catalog
     }
