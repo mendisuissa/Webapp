@@ -1,0 +1,167 @@
+.phase1-audit-shell {
+  overflow: hidden;
+}
+
+.phase1-audit-header {
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+  background: rgba(255,255,255,0.015);
+}
+
+.phase1-audit-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  padding: 18px 22px 22px;
+}
+
+.phase1-audit-card {
+  margin-top: 0;
+  min-width: 0;
+}
+
+.phase1-stack-row {
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: rgba(255,255,255,0.025);
+  border: 1px solid rgba(255,255,255,0.04);
+}
+
+.phase1-subline {
+  margin-top: 6px;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+}
+
+.phase1-bullet-list {
+  margin: 10px 0 0 18px;
+  color: var(--text-muted);
+}
+
+.phase1-empty-state {
+  padding: 14px;
+  border-radius: 16px;
+  background: rgba(255,255,255,0.025);
+  border: 1px dashed rgba(255,255,255,0.09);
+}
+
+.phase1-empty-title {
+  font-weight: 700;
+  color: var(--text);
+  margin-bottom: 8px;
+}
+
+.phase1-safety-card,
+.phase1-narrative-card {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(255,255,255,0.06);
+}
+
+.phase1-proof-note {
+  margin-top: 14px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: rgba(54,128,247,0.08);
+  border: 1px solid rgba(54,128,247,0.14);
+  color: var(--text-muted);
+  font-size: 0.84rem;
+  line-height: 1.5;
+}
+
+.dashboard-impact-grid .detail-list:empty {
+  display: block;
+}
+
+.dashboard-impact-grid .impact-empty-state {
+  padding: 14px;
+  border-radius: 16px;
+  background: rgba(255,255,255,0.025);
+  border: 1px dashed rgba(255,255,255,0.09);
+}
+
+.dashboard-impact-grid .impact-empty-title {
+  color: var(--text);
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+
+.winget-layout {
+  align-items: start;
+}
+
+.winget-layout > .info-card,
+.winget-review-grid > .info-card,
+.winget-result,
+.review-item {
+  min-width: 0;
+}
+
+.winget-layout > .info-card {
+  display: flex;
+  flex-direction: column;
+}
+
+.winget-results {
+  min-height: 0;
+  max-height: 420px;
+  overflow: auto;
+}
+
+.form-row {
+  align-items: stretch;
+}
+
+.form-row .column-search {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin-top: 0;
+}
+
+.form-row .btn {
+  flex: 0 0 auto;
+}
+
+.settings-grid,
+.setting-hints,
+.target-pill-list,
+.readiness-list,
+.review-grid {
+  min-width: 0;
+}
+
+.setting-hints {
+  row-gap: 10px;
+}
+
+.info-badge {
+  max-width: 100%;
+  white-space: normal;
+}
+
+.winget-result {
+  align-items: flex-start;
+}
+
+.winget-result.row {
+  gap: 12px;
+}
+
+.winget-result-title,
+.winget-result-meta,
+.winget-result-submeta,
+.review-item strong,
+.review-item em,
+.target-pill span {
+  overflow-wrap: anywhere;
+}
+
+.drawer-actions.compact,
+.drawer-actions.compact.wrap {
+  flex-wrap: wrap;
+}
+
+@media (max-width: 1100px) {
+  .phase1-audit-grid {
+    grid-template-columns: 1fr;
+  }
+}

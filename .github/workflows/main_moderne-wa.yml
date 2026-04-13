@@ -1,0 +1,160 @@
+name: Build and deploy Node.js app to Azure Web App - ModernE-Wa
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+concurrency:
+  group: moderne-wa-production
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: 'npm'
+
+      - name: Clean install dependencies
+        run: |
+          rm -rf node_modules
+          npm cache clean --force
+          npm ci
+
+          node -e "require('@rollup/rollup-linux-x64-gnu')" || npm i --no-save @rollup/rollup-linux-x64-gnu
+
+      - name: Build workspaces
+        run: |
+          npm run prisma:generate -w @efm/api
+          npm run build -w @efm/shared
+          npm run build -w @efm/api
+          npm run build -w @efm/web
+
+      - name: Verify builds
+        run: |
+          test -f out/apps/api/server.js
+          test -f out/apps/web/index.html
+          grep -q "win32/search" out/apps/api/routes/api.js
+
+      - name: Upload deployment artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: node-app
+          include-hidden-files: true
+          path: |
+            package.json
+            package-lock.json
+            node_modules/**
+            apps/api/**
+            packages/shared/**
+            out/**
+            !.git/**
+
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: build
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: node-app
+
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Configure App Service
+        run: |
+          RG=$(az resource list --name ModernE-Wa --resource-type Microsoft.Web/sites --query "[0].resourceGroup" -o tsv)
+          echo "Resource group: $RG"
+
+          az webapp config appsettings set \
+            --name ModernE-Wa \
+            --resource-group "$RG" \
+            --settings \
+            SCM_DO_BUILD_DURING_DEPLOYMENT=false \
+            ENABLE_ORYX_BUILD=false \
+            WEBSITE_WARMUP_PATH=/api/health \
+            WEBSITES_CONTAINER_START_TIME_LIMIT=1800
+
+          az webapp config set \
+            --name ModernE-Wa \
+            --resource-group "$RG" \
+            --startup-file "node out/apps/api/server.js"
+
+      - name: Deploy to Azure Web App
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: ModernE-Wa
+          slot-name: Production
+          package: .
+
+      - name: Wait for app warmup
+        run: sleep 20
+
+      - name: Post-deploy API health check
+        run: |
+          for i in 1 2 3 4 5 6; do
+            if curl -fsS "https://app.modernendpoint.tech/api/health"; then
+              exit 0
+            fi
+            echo "Health check failed, retrying in 10 seconds..."
+            sleep 10
+          done
+          echo "Health check failed after retries"
+          exit 1
+
+      - name: Post-deploy win32 search route check
+        run: |
+          for i in 1 2 3 4 5 6; do
+            code=$(curl -sS -o /tmp/win32-search.out -w "%{http_code}" "https://app.modernendpoint.tech/api/win32/search?q=google%20chrome&mode=quick")
+
+            if [ "$code" = "200" ] || [ "$code" = "401" ]; then
+              echo "Win32 search route is alive, HTTP $code"
+              cat /tmp/win32-search.out || true
+              exit 0
+            fi
+
+            echo "Win32 search route check returned HTTP $code, retrying in 10 seconds..."
+            sleep 10
+          done
+
+          echo "Win32 search route check failed after retries"
+          exit 1
+
+      - name: Post-deploy frontend smoke check
+        run: |
+          curl -fsS "https://app.modernendpoint.tech" > /tmp/index.html
+          grep -qi "<html" /tmp/index.html
+
+      - name: Deployment summary
+        run: |
+          {
+            echo "## Deployment Summary"
+            echo ""
+            echo "- App Service: ModernE-Wa"
+            echo "- URL: https://app.modernendpoint.tech"
+            echo "- Branch: main"
+            echo "- API health: passed"
+            echo "- Win32 search route check: passed"
+            echo "- Frontend smoke check: passed"
+          } >> $GITHUB_STEP_SUMMARY

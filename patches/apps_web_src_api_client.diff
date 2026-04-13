@@ -1,0 +1,51 @@
+*** Begin Patch
+*** Update File: apps/web/src/api/client.ts
+@@
+ export interface AppAuditResponse {
+@@
+   clusters: Array<{
+@@
+     latest: string;
++    signature?: string;
++    sampleTargets?: string[];
++    verificationState?: 'verified' | 'pending' | 'not-started';
++    operationalSeverity?: 'low' | 'medium' | 'high';
+   }>;
+-  smartPlaybooks: string[];
++  smartPlaybooks: Array<{
++    id: string;
++    title: string;
++    summary: string;
++    actionType: 'detect' | 'remediate' | 'verify';
++    confidence: number;
++    appliesToClusterIds: string[];
++  }>;
+@@
+   verification: {
+     improvedDeviceCount: number;
+     unresolvedRemainder: number;
+     confidenceScore: number;
++    state?: 'verified' | 'pending' | 'watch';
++    proofSummary?: string;
+   };
+@@
+ export interface DashboardImpactResponse {
+@@
+   valueProof: { unresolvedRemainder?: number; improvedCountEstimate?: number; verificationConfidence?: number };
++  queuePreview?: Array<{
++    appId: string;
++    appName: string;
++    clusterLabel: string;
++    impactScore: number;
++    suggestedPlaybook: string;
++    verificationState: 'verified' | 'pending' | 'not-started';
++  }>;
++  proofSummary?: {
++    verifiedApps: number;
++    pendingVerificationApps: number;
++    proofNarrative: string;
++  };
+   smartSummary?: unknown;
+   insights?: unknown[];
+ }
+*** End Patch
