@@ -237,13 +237,26 @@ export async function downloadWin32PackageBundle(
   });
 
   if (!response.ok) {
-    throw new Error(`Failed to build package bundle: ${response.status}`);
+    let message = `Failed to build package bundle: ${response.status}`;
+    try {
+      const body = await response.json() as { error?: string; message?: string };
+      message = body.error || body.message || message;
+    } catch {
+      // keep default message
+    }
+    throw new Error(message);
   }
 
   const blob = await response.blob();
   return blob;
 }
 export async function linkWingetToExistingApp(appId: string, payload: {
+  packageIdentifier: string;
+  displayName: string;
+  publisher: string;
+  installIntent?: 'required' | 'available';
+  runAsAccount?: 'system' | 'user';
+  updateMode?: 'auto' | 'manual';
   reuseAssignments: boolean;
   assignNow?: boolean;
   icon?: WingetIconInput;

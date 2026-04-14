@@ -333,12 +333,28 @@ async function searchWingetCatalog(query: string) {
   const trimmed = query.trim();
   if (!trimmed) return [] as Array<Record<string, string>>;
 
-  const response = await fetch(`https://winget.run/search?query=${encodeURIComponent(trimmed)}`, {
-    headers: { 'User-Agent': 'ModernEndpoint/1.0' }
-  });
+  const fallbackRows = () => {
+    if (!isLikelyWingetPackageIdentifier(trimmed)) return [] as Array<Record<string, string>>;
+    const [publisher, ...rest] = trimmed.split('.');
+    return [{
+      packageIdentifier: trimmed,
+      name: rest.join(' ') || trimmed,
+      publisher,
+      sourceUrl: 'https://winget.run'
+    }];
+  };
+
+  let response: Awaited<ReturnType<typeof fetch>>;
+  try {
+    response = await fetch(`https://winget.run/search?query=${encodeURIComponent(trimmed)}`, {
+      headers: { 'User-Agent': 'ModernEndpoint/1.0' }
+    });
+  } catch {
+    return fallbackRows();
+  }
 
   if (!response.ok) {
-    throw new Error(`WinGet search failed (${response.status}).`);
+    return fallbackRows();
   }
 
   const html = await response.text();
@@ -365,17 +381,45 @@ async function searchWingetCatalog(query: string) {
     if (rows.length >= 12) break;
   }
 
-  if (!rows.length && trimmed.includes('.')) {
-    const [publisher, ...rest] = trimmed.split('.');
-    rows.push({
-      packageIdentifier: trimmed,
-      name: rest.join(' ') || trimmed,
-      publisher,
-      sourceUrl: 'https://winget.run'
-    });
-  }
+  if (!rows.length) return fallbackRows();
 
   return rows;
+}
+
+const wingetPackageIdPattern = /^[A-Za-z0-9][A-Za-z0-9._-]*\.[A-Za-z0-9][A-Za-z0-9._-]*(\.[A-Za-z0-9][A-Za-z0-9._-]*)*$/;
+const entraGroupIdPattern = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$/;
+const wingetIconMimePattern = /^image\/(png|jpeg|jpg|gif|bmp|webp|svg\+xml)$/i;
+
+function isLikelyWingetPackageIdentifier(value: string): boolean {
+  return wingetPackageIdPattern.test(value.trim());
+}
+
+function validateWingetPackageIdentifier(rawPackageIdentifier: string): { ok: true; value: string } | { ok: false; message: string } {
+  const value = rawPackageIdentifier.trim();
+  if (!value) {
+    return { ok: false, message: 'Package identifier is required.' };
+  }
+
+  if (!isLikelyWingetPackageIdentifier(value)) {
+    return {
+      ok: false,
+      message: 'Invalid package identifier format. Use a Winget package ID like Microsoft.VisualStudioCode or ScooterSoftware.BeyondCompare4.'
+    };
+  }
+
+  return { ok: true, value };
+}
+
+function normalizeScriptContent(value: string): string {
+  return value.replace(/\r\n/g, '\n').replace(/\r/g, '\n').replace(/\n/g, '\r\n');
+}
+
+function normalizeNotes(input: unknown): string[] {
+  if (!Array.isArray(input)) return [];
+  return input
+    .map((note) => String(note ?? '').trim())
+    .filter(Boolean)
+    .slice(0, 25);
 }
 
 type WinGetAssignmentTarget = {
@@ -416,6 +460,7 @@ function normalizeWingetTargets(targets: unknown[]): WinGetAssignmentTarget[] {
 
   for (const target of targets) {
     const groupId = String((target as any)?.groupId ?? '').trim();
+    if (!entraGroupIdPattern.test(groupId)) continue;
     if (!groupId || seen.has(groupId)) continue;
     seen.add(groupId);
     normalized.push({ groupId });
@@ -428,6 +473,8 @@ function normalizeWingetIcon(input: unknown): WingetIconPayload | undefined {
   const type = String((input as any)?.type ?? '').trim();
   const value = String((input as any)?.value ?? '').trim();
   if (!type || !value) return undefined;
+  if (!wingetIconMimePattern.test(type)) return undefined;
+  if (value.length > 1024 * 1024 * 2) return undefined;
   return { type, value };
 }
 
@@ -1672,7 +1719,10 @@ apiRouter.post('/winget/deploy', async (req: Request, res: Response) => {
       // Will be caught by the !accessToken guard below
     }
   }
-  const packageIdentifier = String(req.body?.packageIdentifier ?? '').trim();
+  const packageIdentifierRaw = String(req.body?.packageIdentifier ?? '').trim();
+  const packageIdentifierValidation = validateWingetPackageIdentifier(packageIdentifierRaw);
+  if (!packageIdentifierValidation.ok) return res.status(400).json({ ok: false, message: packageIdentifierValidation.message });
+  const packageIdentifier = packageIdentifierValidation.value;
   const displayName = String(req.body?.displayName ?? packageIdentifier).trim();
   const publisher = String(req.body?.publisher ?? packageIdentifier.split('.')[0] ?? 'Unknown').trim();
   const installIntent = String(req.body?.installIntent ?? 'required').trim() === 'available' ? 'available' : 'required';
@@ -1682,7 +1732,9 @@ apiRouter.post('/winget/deploy', async (req: Request, res: Response) => {
   const targets = normalizeWingetTargets(Array.isArray(req.body?.targets) ? req.body.targets : []);
   const icon = normalizeWingetIcon(req.body?.icon);
 
-  if (!packageIdentifier) return res.status(400).json({ ok: false, message: 'Package identifier is required.' });
+  if (assignNow && targets.length === 0) {
+    return res.status(400).json({ ok: false, message: 'Add at least one valid Entra group target (GUID) or set assignNow to false.' });
+  }
 
   if (config.mockMode) {
     return res.json({
@@ -1731,7 +1783,10 @@ apiRouter.post('/winget/deploy', async (req: Request, res: Response) => {
 apiRouter.post('/apps/:id/winget-link', async (req: Request, res: Response) => {
   const sourceAppId = String(req.params.id ?? '').trim();
   const accessToken = (req as any).session?.accessToken as string | undefined;
-  const packageIdentifier = String(req.body?.packageIdentifier ?? '').trim();
+  const packageIdentifierRaw = String(req.body?.packageIdentifier ?? '').trim();
+  const packageIdentifierValidation = validateWingetPackageIdentifier(packageIdentifierRaw);
+  if (!packageIdentifierValidation.ok) return res.status(400).json({ ok: false, message: packageIdentifierValidation.message });
+  const packageIdentifier = packageIdentifierValidation.value;
   const displayName = String(req.body?.displayName ?? packageIdentifier).trim();
   const publisher = String(req.body?.publisher ?? packageIdentifier.split('.')[0] ?? 'Unknown').trim();
   const installIntent = String(req.body?.installIntent ?? 'required').trim() === 'available' ? 'available' : 'required';
@@ -1743,6 +1798,9 @@ apiRouter.post('/apps/:id/winget-link', async (req: Request, res: Response) => {
   const icon = normalizeWingetIcon(req.body?.icon);
 
   if (!sourceAppId || !packageIdentifier) return res.status(400).json({ ok: false, message: 'Source app and package identifier are required.' });
+  if (assignNow && !reuseAssignments && explicitTargets.length === 0) {
+    return res.status(400).json({ ok: false, message: 'Add at least one valid Entra group target (GUID) or enable assignment reuse.' });
+  }
 
   if (config.mockMode) {
     return res.json({
@@ -1998,6 +2056,7 @@ apiRouter.post('/win32/bundle', async (req: Request, res: Response) => {
     const {
       appName,
       publisher,
+      packageId,
       installCommand,
       uninstallCommand,
       detectScript,
@@ -2008,10 +2067,17 @@ apiRouter.post('/win32/bundle', async (req: Request, res: Response) => {
 
     const normalizedAppName = String(appName ?? '').trim();
     const normalizedInstallCommand = String(installCommand ?? '').trim();
+    const normalizedUninstallCommand = String(uninstallCommand ?? '').trim();
+    const normalizedDetectScript = String(detectScript ?? '').trim();
+    const normalizedPackageId = String(packageId ?? '').trim();
     const normalizedSource = String(source ?? '').trim().toLowerCase();
 
     if (!normalizedAppName || !normalizedInstallCommand) {
       return res.status(400).json({ error: 'A real app name and install command are required before building a package bundle.' });
+    }
+
+    if (normalizedInstallCommand.length > 4000 || normalizedUninstallCommand.length > 4000 || normalizedDetectScript.length > 20000) {
+      return res.status(400).json({ error: 'Package scripts are too large. Shorten install/uninstall/detection commands and try again.' });
     }
 
     if (['template', 'fallback'].includes(normalizedSource)) {
@@ -2026,30 +2092,48 @@ apiRouter.post('/win32/bundle', async (req: Request, res: Response) => {
 
     const root = `${safeName}/Intune-Package`;
 
-    const installScript = [
+    const installScript = normalizeScriptContent([
       '$ErrorActionPreference = "Stop"',
       normalizedInstallCommand
-    ].join('\n');
+    ].join('\n'));
 
-    const uninstallScript = [
+    const uninstallScript = normalizeScriptContent([
       '$ErrorActionPreference = "Stop"',
-      uninstallCommand ? String(uninstallCommand) : 'Write-Output "No uninstall command provided."'
-    ].join('\n');
+      normalizedUninstallCommand || 'Write-Output "No uninstall command provided."'
+    ].join('\n'));
 
-    const detectContent = detectScript
-      ? String(detectScript)
+    const detectContent = normalizeScriptContent(normalizedDetectScript
+      ? normalizedDetectScript
       : [
           'Write-Output "Detection script missing"',
           'exit 1'
-        ].join('\n');
+        ].join('\n'));
 
-    const normalizedNotes = Array.isArray(notes) && notes.length
-      ? notes.map((note: unknown) => String(note))
+    const normalizedNotes = normalizeNotes(notes).length
+      ? normalizeNotes(notes)
       : ['Validate in a packaging VM before production rollout.'];
+
+    const generatedAt = new Date().toISOString();
+    const manifest = {
+      generatedAt,
+      appName: normalizedAppName,
+      publisher: String(publisher ?? '').trim() || 'Unknown',
+      packageId: normalizedPackageId,
+      source: normalizedSource || 'unknown',
+      sourceUrl: String(sourceUrl ?? '').trim() || '',
+      scripts: {
+        installCommand: normalizedInstallCommand,
+        uninstallCommand: normalizedUninstallCommand || 'Not provided',
+        detectionType: normalizedDetectScript ? 'custom-script' : 'placeholder-script'
+      },
+      notes: normalizedNotes
+    };
 
     const intuneGuide = [
       `App Name: ${normalizedAppName}`,
       `Publisher: ${publisher || 'Unknown'}`,
+      `Package ID: ${normalizedPackageId || 'N/A'}`,
+      `Generated: ${generatedAt}`,
       '',
       'Install command:',
       'powershell.exe -ExecutionPolicy Bypass -File .\\install.ps1',
@@ -2067,8 +2151,8 @@ apiRouter.post('/win32/bundle', async (req: Request, res: Response) => {
       ...normalizedNotes
     ].join('\n');
 
-    const installText = `Install command\n\n${installCommand}\n`;
-    const uninstallText = `Uninstall command\n\n${uninstallCommand || 'Not provided'}\n`;
+    const installText = `Install command\n\n${normalizedInstallCommand}\n`;
+    const uninstallText = `Uninstall command\n\n${normalizedUninstallCommand || 'Not provided'}\n`;
     const detectionText = 'Detection rule\n\nUse custom detection script: .\\detect.ps1\n';
 
     const readmeText = [
@@ -2095,6 +2179,7 @@ apiRouter.post('/win32/bundle', async (req: Request, res: Response) => {
       { name: `${root}/Install-Command.txt`, content: installText },
       { name: `${root}/Uninstall-Command.txt`, content: uninstallText },
       { name: `${root}/Detection-Rule.txt`, content: detectionText },
+      { name: `${root}/app-manifest.json`, content: JSON.stringify(manifest, null, 2) },
       { name: `${root}/README.txt`, content: readmeText },
       { name: `${root}/files/put-installer-here.txt`, content: 'Place the original installer file in this folder.' }
     ]);

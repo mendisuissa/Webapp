@@ -105,6 +105,9 @@ type Win32UtilityPreset = {
   notes: string[];
 };
 
+const wingetPackageIdPattern = /^[A-Za-z0-9][A-Za-z0-9._-]*\.[A-Za-z0-9][A-Za-z0-9._-]*(\.[A-Za-z0-9][A-Za-z0-9._-]*)*$/;
+const entraGroupIdPattern = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$/;
+
 const win32UtilityPresets: Win32UtilityPreset[] = [
   {
     key: 'chrome',
@@ -962,6 +965,15 @@ ${result.note}` : result.message);
   function addManualWingetTarget(targetType: 'users' | 'devices') {
     const raw = wingetStudio.groupQuery.trim();
     if (!raw) return;
+    if (!entraGroupIdPattern.test(raw)) {
+      setWingetStudio((prev) => ({
+        ...prev,
+        error: 'Manual target must be a valid Entra group object ID (GUID).',
+        message: 'Paste a GUID like 11111111-2222-3333-4444-555555555555 to add a manual target.'
+      }));
+      return;
+    }
+
     setWingetStudio((prev) => {
       if (prev.targets.some((target) => target.groupId === raw && target.targetType === targetType)) return prev;
       return { ...prev, targets: [...prev.targets, { groupId: raw, displayName: raw, targetType }] };
@@ -979,6 +991,14 @@ ${result.note}` : result.message);
     }
 
     const packageIdentifier = wingetStudio.selected?.packageIdentifier ?? wingetStudio.query.trim();
+    if (!wingetPackageIdPattern.test(packageIdentifier)) {
+      setWingetStudio((prev) => ({
+        ...prev,
+        error: 'Use a valid Winget package ID (example: Microsoft.VisualStudioCode).'
+      }));
+      return;
+    }
+
     const displayName = wingetStudio.selected?.name ?? packageIdentifier;
     const publisher = wingetStudio.selected?.publisher ?? packageIdentifier.split('.')[0] ?? 'Unknown';
 
@@ -1714,6 +1734,7 @@ ${result.note}` : result.message);
                   <button className="btn btn-ghost" type="button" onClick={() => addManualWingetTarget('devices')}>Add as device group</button>
                   <button className="btn btn-ghost" type="button" onClick={() => addManualWingetTarget('users')}>Add as user group</button>
                 </div>
+                <div className="summary-text muted">Manual add accepts Entra group object ID (GUID) only.</div>
                 {wingetGroupSearchHasNoResults ? (
                   <div className="winget-empty-state">
                     <div className="winget-empty-title">No group matches returned.</div>
