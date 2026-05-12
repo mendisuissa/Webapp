@@ -470,7 +470,7 @@ router.post('/execute', async (req, res) => {
 
       const deployToAllDevices = Boolean(
         options?.deployToAllDevices || options?.assignToAllDevices ||
-        (!normalizedTargets.length && !Array.isArray(devices)?.length)
+        (!normalizedTargets.length && !(Array.isArray(devices) && devices.length))
       );
 
       const deployResult = await deployWinGetToIntune(effectiveAccessToken, {
