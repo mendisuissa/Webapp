@@ -402,14 +402,43 @@ router.post('/resolve', async (req, res) => {
 router.post('/execute', async (req, res) => {
   if (!validateSharedToken(req, res)) return;
 
-  const { tenantId, approvalId, devices = [], finding = {}, plan = {} } = req.body || {};
+  const { tenantId, approvalId, devices = [], finding = {}, plan = {}, options = {} } = req.body || {};
   const accessToken = (req as any).session?.accessToken as string | undefined;
   const sharedToken = hasValidSharedToken(req);
 
-  const resolved = await resolveApplication(finding);
-  const resolution = plan?.app?.wingetId || plan?.app?.installCommand || plan?.app?.installerUrl
-    ? mergeResolution(resolved, plan, finding)
-    : resolved;
+  // Fast path: if IdentityMonitor already resolved a definitive WinGet ID, use it directly
+  // without running the live resolver (prevents variant mismatch like .Dev/.Beta).
+  const directWingetId: string =
+    String(finding?.packageIdentifier || finding?.wingetId || options?.wingetId || '').trim();
+  const isDirectWingetId = /^[A-Za-z0-9._-]+\.[A-Za-z0-9._-]+$/.test(directWingetId) &&
+    !directWingetId.includes(' ');
+
+  let resolution: RemediationResolution;
+  if (isDirectWingetId) {
+    resolution = {
+      supported: true,
+      remediationType: 'winget-intune-upgrade',
+      autoRemediate: true,
+      source: 'catalog',
+      app: {
+        packageIdentifier: directWingetId,
+        wingetId: directWingetId,
+        installerType: 'winget',
+        source: 'winget',
+        confidence: 'high',
+        displayName: finding?.productName?.includes('.') ? directWingetId.split('.').slice(1).join(' ') : (finding?.productName || directWingetId),
+        publisher: finding?.publisher || directWingetId.split('.')[0],
+        installCommand: `winget install --id ${directWingetId} --exact --silent --accept-source-agreements --accept-package-agreements`,
+        uninstallCommand: `winget uninstall --id ${directWingetId} --exact --silent`,
+        notes: ['Package identifier provided directly by IdentityMonitor enrichment.']
+      }
+    };
+  } else {
+    const resolved = await resolveApplication(finding);
+    resolution = plan?.app?.wingetId || plan?.app?.installCommand || plan?.app?.installerUrl
+      ? mergeResolution(resolved, plan, finding)
+      : resolved;
+  }
 
   if (!resolution.supported || !resolution.app) {
     return res.status(400).json({
@@ -439,6 +468,11 @@ router.post('/execute', async (req, res) => {
         ? devices.filter((d: any) => d?.groupId).map((d: any) => ({ groupId: String(d.groupId) }))
         : [];
 
+      const deployToAllDevices = Boolean(
+        options?.deployToAllDevices || options?.assignToAllDevices ||
+        (!normalizedTargets.length && !Array.isArray(devices)?.length)
+      );
+
       const deployResult = await deployWinGetToIntune(effectiveAccessToken, {
         packageIdentifier: resolution.app.packageIdentifier,
         displayName: resolution.app.displayName || finding.productName || finding.softwareName || resolution.app.packageIdentifier,
@@ -447,6 +481,7 @@ router.post('/execute', async (req, res) => {
         runAsAccount: 'system',
         updateMode: 'manual',
         assignNow: normalizedTargets.length > 0,
+        assignToAllDevices: deployToAllDevices,
         targets: normalizedTargets
       });
 

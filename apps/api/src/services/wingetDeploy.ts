@@ -145,6 +145,28 @@ export async function createAssignment(
   );
 }
 
+// Assign app to ALL devices in the tenant (no group ID needed)
+export async function assignToAllDevices(
+  accessToken: string,
+  appId: string,
+  installIntent: 'required' | 'available' = 'required'
+): Promise<Record<string, unknown>> {
+  return graphRequest<Record<string, unknown>>(
+    accessToken,
+    `/beta/deviceAppManagement/mobileApps/${appId}/assignments`,
+    {
+      method: 'POST',
+      body: {
+        '@odata.type': '#microsoft.graph.mobileAppAssignment',
+        intent: installIntent,
+        target: {
+          '@odata.type': '#microsoft.graph.allDevicesAssignmentTarget'
+        }
+      }
+    }
+  );
+}
+
 export async function assignTargetsToPublishedApp(
   accessToken: string,
   appId: string,
@@ -180,6 +202,7 @@ export async function deployWinGetToIntune(
     runAsAccount: 'system' | 'user';
     updateMode: 'auto' | 'manual';
     assignNow: boolean;
+    assignToAllDevices?: boolean;
     targets: WinGetAssignmentTarget[];
     icon?: WingetIconPayload;
   }
@@ -208,6 +231,36 @@ export async function deployWinGetToIntune(
       publishingState: 'unknown',
       timedOut: false,
       message: 'WinGet app creation returned no app ID.'
+    };
+  }
+
+  // Assign to ALL devices (allDevicesAssignmentTarget) — no group ID needed
+  if (opts.assignToAllDevices) {
+    const publishResult = await waitForMobileAppPublished(accessToken, appId, { timeoutMs: 90000, intervalMs: 5000 });
+    if (!publishResult.timedOut && publishResult.publishingState.toLowerCase() === 'published') {
+      try {
+        await assignToAllDevices(accessToken, appId, opts.installIntent);
+        return {
+          ok: true,
+          appId,
+          createdAssignments: 1,
+          publishingState: publishResult.publishingState,
+          timedOut: false,
+          message: `WinGet app ${opts.displayName} created and assigned to All Devices.`
+        };
+      } catch {
+        // Assignment failed — still return success for app creation
+      }
+    }
+    return {
+      ok: true,
+      appId,
+      createdAssignments: 0,
+      publishingState: publishResult.publishingState,
+      timedOut: publishResult.timedOut,
+      message: publishResult.timedOut
+        ? `WinGet app ${opts.displayName} was created. Intune is still publishing it (assignment pending).`
+        : `WinGet app ${opts.displayName} was created and is ${publishResult.publishingState}.`
     };
   }
 
