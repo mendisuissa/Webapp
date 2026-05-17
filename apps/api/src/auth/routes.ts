@@ -116,3 +116,33 @@ authRouter.post('/logout', (req, res) => {
     res.json({ ok: true });
   });
 });
+
+/**
+ * GET /api/auth/webapp-consent/callback
+ *
+ * Microsoft redirects here after the customer grants Intune admin consent
+ * to the Webapp app registration. This route is PUBLIC (no session required).
+ *
+ * It forwards all query params to the IdentityMonitor backend so that it can
+ * persist the webappConsentGrantedAt timestamp and redirect the user to the
+ * IdentityMonitor dashboard.
+ *
+ * Required env var: IDENTITY_MONITOR_API_URL (e.g. https://identity.modernendpoint.tech)
+ */
+authRouter.get('/webapp-consent/callback', (req, res) => {
+  const identityApiBase = (process.env.IDENTITY_MONITOR_API_URL ?? '').replace(/\/$/, '');
+
+  if (!identityApiBase) {
+    // Fallback: redirect to the Webapp's own frontend with a note
+    const fallback = config.webAppUrl.replace(/\/$/, '');
+    return res.redirect(`${fallback}?webapp_consent=error&reason=identity_api_url_not_configured`);
+  }
+
+  // Pass all Microsoft query params (admin_consent, tenant, error, etc.) through
+  const params = new URLSearchParams();
+  for (const [k, v] of Object.entries(req.query)) {
+    if (typeof v === 'string') params.set(k, v);
+  }
+
+  res.redirect(`${identityApiBase}/api/auth/webapp-consent/callback?${params.toString()}`);
+});
