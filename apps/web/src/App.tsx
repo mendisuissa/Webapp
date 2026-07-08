@@ -29,6 +29,7 @@ import { recognize } from 'tesseract.js';
 import { IntuneAIDrawer } from './components/IntuneAIDrawer.js';
 import Phase1AuditPanels from './components/Phase1AuditPanels.js';
 import Win32UtilityWorkspace from './components/Win32UtilityWorkspace.js';
+import SupervisorWidget from './components/SupervisorWidget.js';
 
 type Row = Record<string, unknown>;
 type AuthState = { connected: boolean; upn: string; tenantId: string; displayName: string; mockMode?: boolean; hasWritePermissions?: boolean; scopes?: string[] };
@@ -1113,6 +1114,7 @@ ${result.note}` : result.message);
 
   return (
     <div className="app-shell">
+      <div style={{ padding: '6px 16px 0' }}><SupervisorWidget /></div>
       <div className="hero-shell">
         <div className="hero-grid">
           <div className="brand-mark">

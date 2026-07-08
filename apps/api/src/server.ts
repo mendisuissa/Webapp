@@ -215,6 +215,16 @@ app.get('/api/internal/health', (req, res) => {
   res.json({ ok: true, service: 'efm-webapp-api', uptime: Math.floor(process.uptime()), mockMode: config.mockMode, timestamp: new Date().toISOString() });
 });
 
+app.get('/api/supervisor/status', async (req, res) => {
+  const relayUrl   = process.env.CLOUD_RELAY_URL;
+  const relayToken = process.env.KERNEL_API_SECRET;
+  if (!relayUrl || !relayToken) return void res.json({ ok: false, error: 'Not configured', recentRuns: [], summary: {} });
+  try {
+    const r = await fetch(`${relayUrl}/api/supervisor/status`, { headers: { Authorization: `Bearer ${relayToken}` }, signal: AbortSignal.timeout(8000) });
+    res.json(r.ok ? await r.json() : { ok: false, error: `Relay ${r.status}`, recentRuns: [], summary: {} });
+  } catch (e: any) { res.json({ ok: false, error: e.message, recentRuns: [], summary: {} }); }
+});
+
 // ✅ Diagnostics
 app.get('/api/diag', (req, res) => {
   const requestHost = req.get('host') ?? '';
