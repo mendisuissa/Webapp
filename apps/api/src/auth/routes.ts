@@ -112,7 +112,9 @@ authRouter.get('/callback', async (req, res) => {
 });
 
 authRouter.post('/logout', (req, res) => {
-  req.session.destroy(() => {
+  if (!req.session) return res.json({ ok: true });
+  req.session.destroy((err) => {
+    if (err) return res.status(500).json({ ok: false, message: 'Logout failed.' });
     res.json({ ok: true });
   });
 });

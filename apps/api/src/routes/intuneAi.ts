@@ -189,35 +189,39 @@ export async function postIntuneAi(req: Request, res: Response) {
   const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
   const model = process.env.OPENAI_MODEL ?? 'gpt-4.1-mini';
 
-  const rsp = await client.responses.create({
-    model,
-    input: [
-      { role: 'system', content: buildSystemBase() },
-      { role: 'system', content: buildSystemMode(body.action) },
-      { role: 'user', content: buildUser(body) }
-    ],
-    text: { format: { type: 'json_schema', ...IntuneAIResultSchema } }
-  });
+  try {
+    const rsp = await client.responses.create({
+      model,
+      input: [
+        { role: 'system', content: buildSystemBase() },
+        { role: 'system', content: buildSystemMode(body.action) },
+        { role: 'user', content: buildUser(body) }
+      ],
+      text: { format: { type: 'json_schema', ...IntuneAIResultSchema } }
+    });
 
-  const text = rsp.output_text ?? '';
-  let parsed: any;
-  try { parsed = JSON.parse(text); }
-  catch {
-    parsed = {
-      action: body.action,
-      signature: body.signature,
-      title: 'AI response (unparsed)',
-      rawText: text,
-      createdAt: new Date().toISOString(),
-      model
-    };
+    const text = rsp.output_text ?? '';
+    let parsed: any;
+    try { parsed = JSON.parse(text); }
+    catch {
+      parsed = {
+        action: body.action,
+        signature: body.signature,
+        title: 'AI response (unparsed)',
+        rawText: text,
+        createdAt: new Date().toISOString(),
+        model
+      };
+    }
+
+    parsed.action = parsed.action ?? body.action;
+    parsed.signature = parsed.signature ?? body.signature;
+    parsed.createdAt = parsed.createdAt ?? new Date().toISOString();
+    parsed.model = parsed.model ?? model;
+
+    cacheSet(cacheKey, parsed);
+    return res.json({ ok: true, result: parsed, cached: false });
+  } catch (err: any) {
+    return res.status(500).json({ ok: false, message: err?.message ?? 'AI request failed.' });
   }
-
-  parsed.action = parsed.action ?? body.action;
-  parsed.signature = parsed.signature ?? body.signature;
-  parsed.createdAt = parsed.createdAt ?? new Date().toISOString();
-  parsed.model = parsed.model ?? model;
-
-  cacheSet(cacheKey, parsed);
-  return res.json({ ok: true, result: parsed, cached: false });
 }

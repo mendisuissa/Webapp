@@ -378,7 +378,7 @@ router.get('/bundles/:fileName', async (req, res) => {
 
 router.post('/resolve', async (req, res) => {
   if (!validateSharedToken(req, res)) return;
-
+  try {
   const { finding = {} } = req.body || {};
   const resolution = await resolveApplication(finding, true); // allow deep pass for explicit resolve calls
 
@@ -397,6 +397,9 @@ router.post('/resolve', async (req, res) => {
     },
     resolution
   });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, message: err?.message ?? 'Resolve failed.' });
+  }
 });
 
 router.post('/execute', async (req, res) => {

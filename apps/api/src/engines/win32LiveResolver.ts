@@ -230,7 +230,7 @@ function pickBestInstaller(urls: string[]): { installerUrl?: string; installerTy
       const rank = (t: InstallerType) => (t === 'msi' ? 1 : t === 'exe' ? 2 : t === 'msix' ? 3 : t === 'zip' ? 4 : 5);
       return rank(a.type) - rank(b.type);
     });
-  const best = ranked[0] ?? urls[0] ? { url: urls[0], type: inferInstallerType(urls[0]) ?? 'unknown' as InstallerType } : undefined;
+  const best = ranked[0] ?? (urls[0] ? { url: urls[0], type: inferInstallerType(urls[0]) ?? 'unknown' as InstallerType } : undefined);
   return best ? { installerUrl: best.url, installerType: best.type } : {};
 }
 

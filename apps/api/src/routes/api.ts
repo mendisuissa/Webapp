@@ -2156,7 +2156,7 @@ apiRouter.post('/win32/bundle', async (req: Request, res: Response) => {
     const detectionText = 'Detection rule\n\nUse custom detection script: .\\detect.ps1\n';
 
     const readmeText = [
-      `${appName} package bundle`,
+      `${normalizedAppName || appName || 'App'} package bundle`,
       '',
       'Files included:',
       '- install.ps1',

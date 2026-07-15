@@ -11,7 +11,7 @@ export const config = {
   mockMode: (process.env.MOCK_MODE ?? 'false').toLowerCase() === 'true',
   databaseUrl: process.env.DATABASE_URL ?? (isProduction ? 'file:/home/data/iais.db' : 'file:./prisma/dev.db'),
   logFile: process.env.LOG_FILE ?? (isProduction ? '/home/LogFiles/iais/app.log' : './logs/app.log'),
-  sessionSecret: process.env.SESSION_SECRET ?? 'dev-session-secret',
+  sessionSecret: process.env.SESSION_SECRET ?? (nodeEnv === 'production' ? (() => { throw new Error('SESSION_SECRET must be set in production'); })() : 'dev-session-secret'),
   webAppUrl: process.env.WEB_APP_URL ?? 'http://localhost:5173',
   corsOrigins: (process.env.CORS_ORIGINS ?? 'http://localhost:5173').split(',').map((item) => item.trim()).filter(Boolean),
   refreshIntervalSeconds: 60,
