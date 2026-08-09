@@ -105,7 +105,46 @@ jobs:
             --resource-group "$RG" \
             --startup-file "node out/apps/api/server.js"
 
-      - name: Deploy to Azure Web App
+      # Single-attempt azure/webapps-deploy@v3 was hitting OneDeploy
+      # Conflict (CODE: 409) from Kudu — same failure class confirmed across
+      # every other app on this Azure subscription (EnrollmentFlow,
+      # IdentityMonitor, MEGuard) in 2026-08-04/09. Last genuinely successful
+      # deploy here was 2026-07-15; every commit since failed to ship.
+      # Retrying 3x, 90s apart, instead of failing on the first conflict.
+      - name: Deploy to Azure Web App (attempt 1)
+        id: deploy-1
+        uses: azure/webapps-deploy@v3
+        continue-on-error: true
+        with:
+          app-name: ModernE-Wa
+          slot-name: Production
+          package: .
+
+      - name: Wait before retry 1
+        if: steps.deploy-1.outcome == 'failure'
+        run: |
+          echo "Attempt 1 failed — waiting 90s before retry..."
+          sleep 90
+
+      - name: Deploy to Azure Web App (attempt 2)
+        id: deploy-2
+        if: steps.deploy-1.outcome == 'failure'
+        uses: azure/webapps-deploy@v3
+        continue-on-error: true
+        with:
+          app-name: ModernE-Wa
+          slot-name: Production
+          package: .
+
+      - name: Wait before retry 2
+        if: steps.deploy-1.outcome == 'failure' && steps.deploy-2.outcome == 'failure'
+        run: |
+          echo "Attempt 2 failed — waiting 90s before retry..."
+          sleep 90
+
+      - name: Deploy to Azure Web App (attempt 3)
+        id: deploy-3
+        if: steps.deploy-1.outcome == 'failure' && steps.deploy-2.outcome == 'failure'
         uses: azure/webapps-deploy@v3
         with:
           app-name: ModernE-Wa
