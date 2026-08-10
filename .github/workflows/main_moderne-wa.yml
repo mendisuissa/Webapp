@@ -105,51 +105,64 @@ jobs:
             --resource-group "$RG" \
             --startup-file "node out/apps/api/server.js"
 
-      # Single-attempt azure/webapps-deploy@v3 was hitting OneDeploy
-      # Conflict (CODE: 409) from Kudu — same failure class confirmed across
-      # every other app on this Azure subscription (EnrollmentFlow,
-      # IdentityMonitor, MEGuard) in 2026-08-04/09. Last genuinely successful
-      # deploy here was 2026-07-15; every commit since failed to ship.
-      # Retrying 3x, 90s apart, instead of failing on the first conflict.
-      - name: Deploy to Azure Web App (attempt 1)
-        id: deploy-1
-        uses: azure/webapps-deploy@v3
-        continue-on-error: true
-        with:
-          app-name: ModernE-Wa
-          slot-name: Production
-          package: .
-
-      - name: Wait before retry 1
-        if: steps.deploy-1.outcome == 'failure'
+      # ── Deploy via WEBSITE_RUN_FROM_PACKAGE, bypassing Kudu/OneDeploy ──
+      # Single-attempt azure/webapps-deploy@v3, then the 3x/90s retry pattern
+      # here, both hit OneDeploy Conflict (CODE: 409) — the same failure
+      # class confirmed on EnrollmentFlowMonitor-Wa and IdentityMonitor on
+      # this same Azure subscription (2026-08-09/10). Both of those apps
+      # worked once after a retry/scmType fix, then regressed back to
+      # persistent 409s hours later — every Kudu-side remedy has proven
+      # non-durable on this subscription. This app confirmed down again live
+      # (504 Gateway Timeout, 2026-08-10) despite the retry pattern having
+      # worked here once before. Bypassing Kudu's OneDeploy pipeline
+      # entirely, same as the other two: build the zip, upload to blob
+      # storage, point WEBSITE_RUN_FROM_PACKAGE at a SAS URL for it.
+      - name: Zip deploy package
         run: |
-          echo "Attempt 1 failed — waiting 90s before retry..."
-          sleep 90
+          zip -r "$RUNNER_TEMP/deploy.zip" . -x ".git/*" >/dev/null
+          unzip -l "$RUNNER_TEMP/deploy.zip" | tail -5
 
-      - name: Deploy to Azure Web App (attempt 2)
-        id: deploy-2
-        if: steps.deploy-1.outcome == 'failure'
-        uses: azure/webapps-deploy@v3
-        continue-on-error: true
-        with:
-          app-name: ModernE-Wa
-          slot-name: Production
-          package: .
-
-      - name: Wait before retry 2
-        if: steps.deploy-1.outcome == 'failure' && steps.deploy-2.outcome == 'failure'
+      - name: Upload package to Blob Storage
+        id: upload
         run: |
-          echo "Attempt 2 failed — waiting 90s before retry..."
-          sleep 90
+          ACCOUNT="moderneWa"
+          ACCOUNT_LC=$(echo "$ACCOUNT" | tr '[:upper:]' '[:lower:]')
+          CONTAINER="deploy-packages"
+          BLOB="app-${{ github.sha }}.zip"
 
-      - name: Deploy to Azure Web App (attempt 3)
-        id: deploy-3
-        if: steps.deploy-1.outcome == 'failure' && steps.deploy-2.outcome == 'failure'
-        uses: azure/webapps-deploy@v3
-        with:
-          app-name: ModernE-Wa
-          slot-name: Production
-          package: .
+          RG=$(az resource list --name ModernE-Wa --resource-type Microsoft.Web/sites --query "[0].resourceGroup" -o tsv)
+
+          az storage account show --name "$ACCOUNT_LC" --resource-group "$RG" >/dev/null 2>&1 || \
+            az storage account create --name "$ACCOUNT_LC" --resource-group "$RG" \
+              --sku Standard_LRS --kind StorageV2 --min-tls-version TLS1_2 >/dev/null
+
+          KEY=$(az storage account keys list --account-name "$ACCOUNT_LC" --resource-group "$RG" --query "[0].value" -o tsv)
+
+          az storage container create \
+            --account-name "$ACCOUNT_LC" --account-key "$KEY" \
+            --name "$CONTAINER" --public-access off >/dev/null
+
+          az storage blob upload \
+            --account-name "$ACCOUNT_LC" --account-key "$KEY" \
+            --container-name "$CONTAINER" --name "$BLOB" \
+            --file "$RUNNER_TEMP/deploy.zip" --overwrite >/dev/null
+
+          EXPIRY=$(date -u -d "+10 years" '+%Y-%m-%dT%H:%MZ')
+          SAS=$(az storage blob generate-sas \
+            --account-name "$ACCOUNT_LC" --account-key "$KEY" \
+            --container-name "$CONTAINER" --name "$BLOB" \
+            --permissions r --expiry "$EXPIRY" -o tsv)
+
+          BLOB_URL="https://${ACCOUNT_LC}.blob.core.windows.net/${CONTAINER}/${BLOB}?${SAS}"
+          echo "::add-mask::$BLOB_URL"
+          echo "blob_url=$BLOB_URL" >> "$GITHUB_OUTPUT"
+
+      - name: Point WEBSITE_RUN_FROM_PACKAGE at the new package
+        run: |
+          RG=$(az resource list --name ModernE-Wa --resource-type Microsoft.Web/sites --query "[0].resourceGroup" -o tsv)
+          az webapp config appsettings set --name ModernE-Wa --resource-group "$RG" --settings \
+            WEBSITE_RUN_FROM_PACKAGE="${{ steps.upload.outputs.blob_url }}" >/dev/null
+          echo "✅ WEBSITE_RUN_FROM_PACKAGE updated — app restarts and mounts the new package"
 
       - name: Wait for app warmup
         run: sleep 20
