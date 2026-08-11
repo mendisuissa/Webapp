@@ -248,8 +248,21 @@ export async function deployWinGetToIntune(
           timedOut: false,
           message: `WinGet app ${opts.displayName} created and assigned to All Devices.`
         };
-      } catch {
-        // Assignment failed — still return success for app creation
+      } catch (assignErr: any) {
+        // Was silently swallowed — the caller (an automated system, for the
+        // one path that reaches this: IdentityMonitor's auto-remediation)
+        // saw ok:true with a success-sounding message and believed the
+        // fleet-wide assignment happened when it hadn't. Found live
+        // (2026-08-11) via a company-wide sweep for silent-failure bugs.
+        console.error(`[wingetDeploy] assignToAllDevices failed for app ${appId} (${opts.displayName}):`, assignErr?.message ?? assignErr);
+        return {
+          ok: false,
+          appId,
+          createdAssignments: 0,
+          publishingState: publishResult.publishingState,
+          timedOut: false,
+          message: `WinGet app ${opts.displayName} was created but assignment to All Devices FAILED: ${assignErr?.message ?? 'unknown error'}. Nothing was deployed.`
+        };
       }
     }
     return {

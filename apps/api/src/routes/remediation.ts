@@ -471,10 +471,22 @@ router.post('/execute', async (req, res) => {
         ? devices.filter((d: any) => d?.groupId).map((d: any) => ({ groupId: String(d.groupId) }))
         : [];
 
-      const deployToAllDevices = Boolean(
-        options?.deployToAllDevices || options?.assignToAllDevices ||
-        (!normalizedTargets.length && !(Array.isArray(devices) && devices.length))
-      );
+      // Was: defaulted to deploying to the ENTIRE FLEET whenever no device
+      // list was given at all — the absence of targets silently meant
+      // "everyone," with no confirmation step on this headless,
+      // shared-token-authenticated route. Found live (2026-08-11) via a
+      // company-wide sweep for unguarded-automation bugs. Confirmed
+      // IdentityMonitor's own autoRemediationService.js — the one caller
+      // that genuinely wants fleet-wide deployment — already passes
+      // deployToAllDevices:true explicitly, so no legitimate caller relies
+      // on the implicit fallback. Now requires an explicit opt-in.
+      const deployToAllDevices = Boolean(options?.deployToAllDevices || options?.assignToAllDevices);
+      if (!deployToAllDevices && normalizedTargets.length === 0) {
+        return res.status(400).json({
+          ok: false,
+          error: 'No device targets specified. Pass devices with groupId, or explicitly set options.deployToAllDevices=true to target every device.'
+        });
+      }
 
       const deployResult = await deployWinGetToIntune(effectiveAccessToken, {
         packageIdentifier: resolution.app.packageIdentifier,
@@ -507,6 +519,30 @@ router.post('/execute', async (req, res) => {
           }
         });
       }
+
+      // deployResult.ok === false without a thrown exception (e.g. the app
+      // was created but assignment failed) used to fall through silently to
+      // the "no access token / non-winget" bundle-fallback below, reporting
+      // a misleading reason for something that actually failed for a
+      // different, specific cause. Report the real reason instead.
+      return res.status(502).json({
+        ok: false,
+        jobId,
+        status: 'deploy-failed',
+        executor: 'webapp',
+        mode: 'live-winget-intune',
+        tenantId: tenantId || null,
+        approvalId: approvalId || null,
+        app: resolution.app,
+        error: deployResult.message,
+        live: deployResult,
+        sourceFinding: {
+          cveId: finding.cveId || null,
+          productName: finding.productName || finding.softwareName || null,
+          publisher: finding.publisher || null,
+          recommendation: finding.recommendation || null
+        }
+      });
     } catch (deployErr: any) {
       // Graph API error — fall through to bundle with error info
       const bundleInfo = await writeBundle(jobId, resolution);
