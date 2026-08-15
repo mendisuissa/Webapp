@@ -12,5 +12,9 @@ declare module 'express-session' {
     };
     authElevated?: boolean;
     hasWritePermissions?: boolean;
+    // Set by POST /api/auth/qa-login (see auth/qaAuth.ts) — a verified QA
+    // bot session with no real accessToken, so it can pass the "signed in"
+    // gate for UI checks without ever calling Graph on anyone's behalf.
+    isQaTestSession?: boolean;
   }
 }

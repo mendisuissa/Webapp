@@ -21,7 +21,14 @@ import { deployWinGetToIntune } from '../services/wingetDeploy.js';
 const incidentRepo = new PrismaIncidentRepository();
 
 function ensureConnected(req: Request, res: Response, next: NextFunction): void {
-  if (config.mockMode || (req as any).session?.accessToken) {
+  // isQaTestSession (see auth/qaAuth.ts + POST /api/auth/qa-login) is a
+  // verified QA bot session with no real accessToken — letting it through
+  // here is safe because every route behind this gate that reads
+  // session.accessToken already treats "falsy" as "fall back to fixture
+  // data" (see getDataBundle), never as "throw" — so a QA session sees
+  // real, meaningful fixture data instead of only the anonymous landing
+  // page, without ever being able to call Graph on a real tenant's behalf.
+  if (config.mockMode || (req as any).session?.accessToken || (req as any).session?.isQaTestSession) {
     next();
     return;
   }
