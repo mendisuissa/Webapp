@@ -29,6 +29,15 @@ export const config = {
     redirectUri: process.env.ENTRA_REDIRECT_URI ?? 'http://localhost:4000/api/auth/callback',
     scopes: (process.env.GRAPH_SCOPES ?? 'openid profile offline_access User.Read User.ReadBasic.All DeviceManagementManagedDevices.Read.All DeviceManagementApps.Read.All').split(' ').filter(Boolean),
     scopesWrite: (process.env.GRAPH_SCOPES_WRITE ?? 'openid profile offline_access User.Read User.ReadBasic.All DeviceManagementManagedDevices.Read.All DeviceManagementApps.Read.All DeviceManagementApps.ReadWrite.All Group.Read.All').split(' ').filter(Boolean)
+  },
+  // Same pattern as enrollment-flow-monitor-webapp's config.qaLogin — lets
+  // the automated QA bot trade a verified client-credentials token from the
+  // dedicated QA_WEBAPP app registration for a real (Graph-less) session, so
+  // it can exercise the authenticated dashboard/devices/apps views instead
+  // of only smoke-testing the anonymous landing page. See auth/qaAuth.ts.
+  qaLogin: {
+    clientId: process.env.QA_WEBAPP_CLIENT_ID ?? '',
+    tenantId: process.env.QA_WEBAPP_TENANT_ID ?? ''
   }
 };
 

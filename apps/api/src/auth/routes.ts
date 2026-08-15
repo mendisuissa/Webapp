@@ -1,6 +1,7 @@
 import { Router, type Request } from 'express';
 import { config } from '../config.js';
 import { getMsalApp } from './msal.js';
+import { validateQaToken } from './qaAuth.js';
 
 export const authRouter = Router();
 
@@ -24,6 +25,21 @@ function decodeTokenScopes(token: string): string[] {
 }
 
 authRouter.get('/status', (req, res) => {
+  // QA test sessions (see POST /qa-login) have no accessToken by design —
+  // they can't call Graph, so report connected-with-no-write-permissions
+  // rather than falling through to the "not connected" branch below.
+  if (req.session.isQaTestSession) {
+    return res.json({
+      connected: true,
+      upn: 'qa-bot@modernendpoint.tech',
+      tenantId: config.qaLogin.tenantId,
+      displayName: 'QA Automation',
+      mockMode: config.mockMode,
+      hasWritePermissions: false,
+      scopes: []
+    });
+  }
+
   if (!req.session.account || !req.session.accessToken) {
     return res.json({ connected: false, upn: '', tenantId: '', displayName: '', mockMode: config.mockMode, hasWritePermissions: false, scopes: [] });
   }
@@ -108,6 +124,43 @@ authRouter.get('/callback', async (req, res) => {
     res.redirect(returnUrl);
   } catch (error) {
     res.status(500).send(error instanceof Error ? error.message : 'Auth callback failed');
+  }
+});
+
+// QA-only login path: trades a verified client-credentials token from the
+// dedicated QA app registration for a real session, so the automated QA
+// bot can test the authenticated dashboard/devices/apps views without ever
+// performing interactive Microsoft sign-in. See auth/qaAuth.ts for what
+// "verified" requires — this is not a generic bypass, it rejects anything
+// that isn't signed by the exact configured tenant for the exact
+// configured QA app id. Deliberately never sets accessToken: this session
+// only satisfies the "is someone signed in" UI gate — it cannot call Graph
+// on anyone's behalf, so getDataBundle() falls back to its existing
+// fixture-data path (same path used today for local dev / MOCK_MODE)
+// instead of ever touching real tenant data.
+authRouter.post('/qa-login', async (req, res) => {
+  const authHeader = req.get('authorization') || '';
+  const bearer = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
+
+  if (!bearer) {
+    return res.status(401).json({ message: 'Missing bearer token.' });
+  }
+
+  try {
+    const claims = await validateQaToken(bearer);
+
+    req.session.account = {
+      username: 'qa-bot@modernendpoint.tech',
+      tenantId: claims.tid ?? config.qaLogin.tenantId,
+      name: 'QA Automation'
+    };
+    req.session.isQaTestSession = true;
+
+    console.log('QA_LOGIN_OK', { appId: claims.azp ?? claims.appid });
+    res.json({ ok: true });
+  } catch (error) {
+    console.warn('QA_LOGIN_REJECTED', error instanceof Error ? error.message : error);
+    res.status(401).json({ message: 'Invalid QA token.' });
   }
 });
 
