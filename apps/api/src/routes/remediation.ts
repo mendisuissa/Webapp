@@ -1,3 +1,4 @@
+import { getSharedToken, hasValidSharedToken, assertRemediationHeld, holdLegacyResponse } from '../services/remediationSecurity.js';
 import { Router } from 'express';
 import crypto from 'crypto';
 import fs from 'fs/promises';
@@ -11,6 +12,8 @@ import { authConfigured } from '../config.js';
 import { deployWinGetToIntune } from '../services/wingetDeploy.js';
 
 const router = Router();
+// Router-local gate is mandatory even when mounted before session middleware.
+router.use((req, res, next) => { if (validateSharedToken(req, res)) next(); });
 const currentFilePath = fileURLToPath(import.meta.url);
 const currentDir = path.dirname(currentFilePath);
 const bundleRoot = path.resolve(currentDir, '../../../../../data/remediation-bundles');
@@ -40,19 +43,6 @@ type RemediationResolution = {
   detail?: string;
   source?: 'live-resolver' | 'catalog' | 'none';
 };
-
-function getSharedToken(req: any) {
-  const authHeader = req.headers.authorization || '';
-  return authHeader.startsWith('Bearer ')
-    ? authHeader.slice('Bearer '.length)
-    : '';
-}
-
-function hasValidSharedToken(req: any): boolean {
-  const configuredToken = process.env.REMEDIATION_SHARED_TOKEN;
-  if (!configuredToken) return true;
-  return getSharedToken(req) === configuredToken;
-}
 
 function validateSharedToken(req: any, res: any): boolean {
   if (!hasValidSharedToken(req)) {
@@ -324,6 +314,7 @@ function getBaseUrl(req: any) {
 }
 
 async function callSelfApi(req: any, endpoint: string, body: Record<string, unknown>) {
+  assertRemediationHeld();
   const headers: Record<string, string> = {
     'Content-Type': 'application/json'
   };
@@ -366,6 +357,7 @@ router.get('/health', (req, res) => {
 });
 
 router.get('/bundles/:fileName', async (req, res) => {
+  if (holdLegacyResponse(res, 'P0_LEGACY_BUNDLE_HELD')) return;
   const fileName = path.basename(String(req.params.fileName || ''));
   const filePath = path.join(bundleRoot, fileName);
   try {
@@ -393,7 +385,7 @@ router.post('/resolve', async (req, res) => {
     },
     connection: {
       mode: (req as any).session?.accessToken ? 'session' : hasValidSharedToken(req) ? 'shared-token' : 'none',
-      executable: !!(req as any).session?.accessToken || hasValidSharedToken(req)
+      executable: false
     },
     resolution
   });
@@ -403,6 +395,8 @@ router.post('/resolve', async (req, res) => {
 });
 
 router.post('/execute', async (req, res) => {
+  if (!validateSharedToken(req, res)) return;
+  if (holdLegacyResponse(res)) return;
   if (!validateSharedToken(req, res)) return;
 
   const { tenantId, approvalId, devices = [], finding = {}, plan = {}, options = {} } = req.body || {};

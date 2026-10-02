@@ -1,3 +1,4 @@
+import { assertRemediationHeld } from './remediationSecurity.js';
 /**
  * WinGet / Intune deployment helpers.
  * Shared by both the interactive API route (/api/winget/deploy) and the
@@ -56,6 +57,7 @@ export async function createWinGetApp(
   accessToken: string,
   payload: WinGetCreateAppPayload
 ): Promise<Record<string, unknown>> {
+  assertRemediationHeld();
   const body: Record<string, unknown> = {
     '@odata.type': '#microsoft.graph.winGetApp',
     displayName: payload.displayName,
@@ -128,6 +130,7 @@ export async function createAssignment(
   appId: string,
   assignment: { groupId: string; installIntent: 'required' | 'available' | 'uninstall' }
 ): Promise<Record<string, unknown>> {
+  assertRemediationHeld();
   return graphRequest<Record<string, unknown>>(
     accessToken,
     `/beta/deviceAppManagement/mobileApps/${appId}/assignments`,
@@ -151,6 +154,7 @@ export async function assignToAllDevices(
   appId: string,
   installIntent: 'required' | 'available' = 'required'
 ): Promise<Record<string, unknown>> {
+  assertRemediationHeld();
   return graphRequest<Record<string, unknown>>(
     accessToken,
     `/beta/deviceAppManagement/mobileApps/${appId}/assignments`,
@@ -173,6 +177,7 @@ export async function assignTargetsToPublishedApp(
   targets: WinGetAssignmentTarget[],
   installIntent: 'required' | 'available'
 ): Promise<{ appId: string; createdAssignments: number; publishingState: string; pending: boolean }> {
+  assertRemediationHeld();
   const publishResult = await waitForMobileAppPublished(accessToken, appId);
 
   if (publishResult.timedOut || publishResult.publishingState.toLowerCase() !== 'published') {
@@ -214,6 +219,7 @@ export async function deployWinGetToIntune(
   timedOut: boolean;
   message: string;
 }> {
+  assertRemediationHeld();
   const app = await createWinGetApp(accessToken, {
     packageIdentifier: opts.packageIdentifier,
     displayName: opts.displayName,

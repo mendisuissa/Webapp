@@ -1,3 +1,4 @@
+import { assertRemediationHeld } from '../services/remediationSecurity.js';
 import { safeArray } from '../utils/safe.js';
 
 const GRAPH_BASE = 'https://graph.microsoft.com';
@@ -20,6 +21,7 @@ function sleep(ms: number): Promise<void> {
 
 async function graphFetch(accessToken: string, path: string, options: GraphRequestOptions = {}): Promise<Response> {
   const method = options.method ?? 'GET';
+  if (method !== 'GET' || options.body !== undefined || Object.keys(options.headers ?? {}).some(k => !['consistencylevel','prefer','accept'].includes(k.toLowerCase()))) assertRemediationHeld();
   const maxRetries = options.maxRetries ?? 3;
   let attempt = 0;
   let delay = 500;

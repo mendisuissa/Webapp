@@ -1,3 +1,4 @@
+import { assertRemediationHeld, holdLegacyResponse } from '../services/remediationSecurity.js';
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import fs from 'fs/promises';
 import { buildZip } from '../engines/win32Zip.js';
@@ -488,6 +489,7 @@ function buildWingetIcon(icon?: WingetIconPayload) {
 }
 
 async function createAssignment(accessToken: string, appId: string, assignment: { groupId: string; installIntent: 'required' | 'available' | 'uninstall' }) {
+  assertRemediationHeld();
   return graphRequest<Record<string, unknown>>(accessToken, `/beta/deviceAppManagement/mobileApps/${appId}/assignments`, {
     method: 'POST',
     body: {
@@ -502,6 +504,7 @@ async function createAssignment(accessToken: string, appId: string, assignment: 
 }
 
 async function createWinGetApp(accessToken: string, payload: WinGetCreateAppPayload) {
+  assertRemediationHeld();
   const body: Record<string, unknown> = {
     '@odata.type': '#microsoft.graph.winGetApp',
     displayName: payload.displayName,
@@ -526,6 +529,7 @@ async function createWinGetApp(accessToken: string, payload: WinGetCreateAppPayl
 }
 
 async function updateWinGetApp(accessToken: string, appId: string, payload: Partial<WinGetCreateAppPayload>) {
+  assertRemediationHeld();
   const body: Record<string, unknown> = {
     '@odata.type': '#microsoft.graph.winGetApp'
   };
@@ -1587,6 +1591,7 @@ apiRouter.get('/apps/:id/assignments', async (req: Request, res: Response) => {
 });
 
 apiRouter.post('/apps/:id/uninstall', async (req: Request, res: Response) => {
+  if (holdLegacyResponse(res)) return;
   const appId = String(req.params.id ?? '').trim();
   const appName = String(req.body?.name ?? '').trim();
   const assignmentIds = Array.isArray(req.body?.assignmentIds) ? req.body.assignmentIds.map((x: unknown) => String(x ?? '').trim()).filter(Boolean) : [];
@@ -1710,6 +1715,7 @@ apiRouter.get('/winget/search', async (req: Request, res: Response) => {
 });
 
 apiRouter.post('/winget/deploy', async (req: Request, res: Response) => {
+  if (holdLegacyResponse(res)) return;
   let accessToken = (req as any).session?.accessToken as string | undefined;
   // Fall back to Client Credentials app token for server-to-server calls (no user session)
   if (!accessToken && authConfigured()) {
@@ -1781,6 +1787,7 @@ apiRouter.post('/winget/deploy', async (req: Request, res: Response) => {
 });
 
 apiRouter.post('/apps/:id/winget-link', async (req: Request, res: Response) => {
+  if (holdLegacyResponse(res)) return;
   const sourceAppId = String(req.params.id ?? '').trim();
   const accessToken = (req as any).session?.accessToken as string | undefined;
   const packageIdentifierRaw = String(req.body?.packageIdentifier ?? '').trim();
@@ -1874,6 +1881,7 @@ apiRouter.post('/apps/:id/winget-link', async (req: Request, res: Response) => {
 });
 
 apiRouter.post('/apps/:id/winget-update', async (req: Request, res: Response) => {
+  if (holdLegacyResponse(res)) return;
   const appId = String(req.params.id ?? '').trim();
   const accessToken = (req as any).session?.accessToken as string | undefined;
   const displayName = String(req.body?.displayName ?? '').trim();
