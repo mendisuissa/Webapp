@@ -12,6 +12,8 @@
   "scripts": {
     "dev": "concurrently \"npm run dev -w @efm/api\" \"npm run dev -w @efm/web\"",
     "build": "npm run build -w @efm/shared && npm run build -w @efm/api && npm run build -w @efm/web",
+    "deploy:materialize": "node scripts/materialize-runtime-workspaces.mjs",
+    "test:deploy-packaging": "node --test scripts/materialize-runtime-workspaces.test.mjs",
     "lint": "npm run lint --workspaces",
     "prisma:generate": "npm run prisma:generate -w @efm/api",
     "prisma:migrate": "npm run prisma:migrate -w @efm/api"

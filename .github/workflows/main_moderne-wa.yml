@@ -48,7 +48,11 @@ jobs:
           grep -q "win32/search" out/apps/api/routes/api.js
 
       - name: Prune dev dependencies before packaging
-        run: npm prune --omit=dev
+        run: |
+          npm prune --omit=dev
+          npm run deploy:materialize
+          test -f node_modules/@efm/shared/dist/index.js
+          node -e "import('@efm/shared').then(() => console.log('runtime workspace resolution: PASS'))"
 
       - name: Upload deployment artifact
         uses: actions/upload-artifact@v4
