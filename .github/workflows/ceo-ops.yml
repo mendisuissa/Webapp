@@ -1,0 +1,73 @@
+name: CEO ops (Azure diagnose / restart)
+
+# Lets the CEO agent diagnose this app's Azure App Service, and restart it when it is down, with the
+# same OIDC login the deploy workflow uses. There are no stored keys. This repository's logs are
+# public, so print only service state, bindings, certificate dates and HTTP codes; never app logs or
+# settings.
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: diagnose (read-only) or restart
+        required: true
+        default: diagnose
+        type: choice
+        options: [diagnose, restart]
+
+permissions: {}
+
+concurrency:
+  group: ceo-ops
+  cancel-in-progress: false
+
+jobs:
+  ops:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      APP: ModernE-Wa
+      HOST: app.modernendpoint.tech
+      HEALTH_PATH: /api/health
+    steps:
+      - uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2.3.0
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Diagnose
+        run: |
+          RG=$(az resource list --name "$APP" --resource-type Microsoft.Web/sites --query "[0].resourceGroup" -o tsv)
+          echo "RG=$RG" >> "$GITHUB_ENV"
+          echo "### $APP" >> "$GITHUB_STEP_SUMMARY"
+          az webapp show -n "$APP" -g "$RG" \
+            --query "{state:state, availability:availabilityState, httpsOnly:httpsOnly, defaultHost:defaultHostName, enabledHosts:enabledHostNames}" -o json | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "--- hostname bindings"
+          az webapp config hostname list --webapp-name "$APP" -g "$RG" --query "[].{name:name, sslState:sslState}" -o table
+          echo "--- certificates in the resource group"
+          az webapp config ssl list -g "$RG" --query "[].{subject:subjectName, expires:expirationDate}" -o table
+          DEFAULT=$(az webapp show -n "$APP" -g "$RG" --query defaultHostName -o tsv)
+          echo "DEFAULT=$DEFAULT" >> "$GITHUB_ENV"
+          echo "--- probes"
+          for url in "https://$HOST$HEALTH_PATH" "https://$DEFAULT$HEALTH_PATH"; do
+            curl -sS -o /dev/null -m 30 -w "%{http_code} %{time_total}s $url\n" "$url" 2>&1 | tee -a "$GITHUB_STEP_SUMMARY" || true
+          done
+          echo "--- TLS on the custom domain"
+          echo | timeout 20 openssl s_client -connect "$HOST:443" -servername "$HOST" 2>/dev/null | openssl x509 -noout -subject -enddate 2>&1 || echo "TLS handshake failed for $HOST"
+
+      - name: Restart
+        if: inputs.action == 'restart'
+        run: |
+          az webapp restart -n "$APP" -g "$RG"
+          echo "Restarted $APP; waiting for warm-up"
+          for i in $(seq 1 12); do
+            code=$(curl -sS -o /dev/null -m 30 -w "%{http_code}" "https://$HOST$HEALTH_PATH" || echo 000)
+            echo "attempt $i: $code"
+            if [ "$code" -ge 200 ] && [ "$code" -lt 400 ]; then echo "healthy: $code" >> "$GITHUB_STEP_SUMMARY"; exit 0; fi
+            sleep 15
+          done
+          echo "still unhealthy after restart" >> "$GITHUB_STEP_SUMMARY"
+          exit 1
