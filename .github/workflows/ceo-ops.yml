@@ -12,7 +12,7 @@ on:
         required: true
         default: diagnose
         type: choice
-        options: [list, diagnose, restart]
+        options: [list, diagnose, restart, entra-revoke-leaked]
       app:
         description: App Service name (default is this repo's app)
         required: false
@@ -25,6 +25,10 @@ on:
         description: Health path to probe
         required: false
         default: /api/health
+      hint:
+        description: For entra-revoke-leaked only, the 3-character hint of a leaked client secret
+        required: false
+        default: ''
 
 permissions: {}
 
@@ -43,6 +47,8 @@ jobs:
       APP: ${{ inputs.app }}
       HOST: ${{ inputs.host }}
       HEALTH_PATH: ${{ inputs.health }}
+      HINT: ${{ inputs.hint }}
+      ACTION: ${{ inputs.action }}
     steps:
       # Inputs reach the shell only through env and are validated before use.
       - name: Validate inputs
@@ -50,6 +56,7 @@ jobs:
           [[ "$APP" =~ ^[A-Za-z0-9-]{2,60}$ ]] || { echo "bad app"; exit 1; }
           [[ "$HOST" =~ ^[a-z0-9.-]{3,100}$ ]] || { echo "bad host"; exit 1; }
           [[ "$HEALTH_PATH" =~ ^/[A-Za-z0-9/_.-]{0,80}$ ]] || { echo "bad health path"; exit 1; }
+          if [ "$ACTION" = entra-revoke-leaked ]; then [[ "$HINT" =~ ^[A-Za-z0-9~._-]{3}$ ]] || { echo "bad hint"; exit 1; }; fi
 
       - uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2.3.0
         with:
@@ -63,7 +70,7 @@ jobs:
           az webapp list --query "[].{name:name, state:state, rg:resourceGroup, hosts:join(', ', hostNames)}" -o table | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Diagnose
-        if: inputs.action != 'list'
+        if: inputs.action == 'diagnose' || inputs.action == 'restart'
         run: |
           RG=$(az resource list --name "$APP" --resource-type Microsoft.Web/sites --query "[0].resourceGroup" -o tsv)
           [ -n "$RG" ] || { echo "App Service $APP not found or not visible to this identity"; exit 1; }
@@ -97,3 +104,21 @@ jobs:
           done
           echo "still unhealthy after restart" >> "$GITHUB_STEP_SUMMARY"
           exit 1
+
+      # Revokes one client secret that leaked (for example into logs). It finds the app registration
+      # whose password credential has this hint, and deletes only that credential, and only when
+      # exactly one credential matches. It prints app display names, app IDs and key IDs, never a
+      # secret value.
+      - name: Revoke leaked Entra client secret
+        if: inputs.action == 'entra-revoke-leaked'
+        run: |
+          matches=$(az ad app list --all --query "[].{app:appId, name:displayName, keys:passwordCredentials[?hint=='$HINT'].keyId}" -o json \
+            | jq -c '[.[] | select(.keys | length > 0) | {app, name, key: .keys[]}]')
+          count=$(echo "$matches" | jq length)
+          echo "credentials matching the hint: $count" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "$matches" | jq -r '.[] | "\(.name) app=\(.app) key=\(.key)"' | tee -a "$GITHUB_STEP_SUMMARY"
+          [ "$count" = 1 ] || { echo "not exactly one match; nothing revoked" | tee -a "$GITHUB_STEP_SUMMARY"; exit 1; }
+          app=$(echo "$matches" | jq -r '.[0].app'); key=$(echo "$matches" | jq -r '.[0].key')
+          az ad app credential delete --id "$app" --key-id "$key"
+          left=$(az ad app credential list --id "$app" --query "[?keyId=='$key'] | length(@)" -o tsv)
+          [ "$left" = 0 ] && echo "revoked key $key on app $app" | tee -a "$GITHUB_STEP_SUMMARY" || { echo "credential still present"; exit 1; }
