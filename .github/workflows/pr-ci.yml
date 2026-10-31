@@ -1,0 +1,32 @@
+# Pull-request CI: build and test only. No secrets, no Azure login, no deploy.
+# The deploy workflow (main_moderne-wa.yml) runs only on push to main.
+name: PR CI
+on:
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.x'
+          cache: 'npm'
+      - name: Install
+        run: |
+          npm ci --no-audit --no-fund
+          node -e "require('@rollup/rollup-linux-x64-gnu')" || npm i --no-save @rollup/rollup-linux-x64-gnu
+      - name: Build
+        run: |
+          npm run prisma:generate -w @efm/api
+          npm run build -w @efm/shared
+          npm run build -w @efm/api
+          npm run build -w @efm/web
+          test -f out/apps/api/server.js
+          test -f out/apps/web/index.html
+      - name: API tests
+        run: npm test -w @efm/api
