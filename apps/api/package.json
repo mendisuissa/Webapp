@@ -9,7 +9,8 @@
     "start": "node ../../out/apps/api/server.js",
     "lint": "tsc -p tsconfig.json --noEmit",
     "prisma:generate": "prisma generate",
-    "prisma:migrate": "prisma migrate dev --name init"
+    "prisma:migrate": "prisma migrate dev --name init",
+    "test": "node --test test/health.test.mjs"
   },
   "dependencies": {
     "@azure/msal-node": "^2.14.0",

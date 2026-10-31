@@ -8,11 +8,11 @@ on:
   workflow_dispatch:
     inputs:
       action:
-        description: list (all apps in the group), diagnose (read-only) or restart
+        description: list (all apps in the group), diagnose (read-only), metrics (read-only, numeric only) or restart
         required: true
         default: diagnose
         type: choice
-        options: [list, diagnose, restart, entra-revoke-leaked]
+        options: [list, diagnose, metrics, restart, entra-revoke-leaked]
       app:
         description: App Service name (default is this repo's app)
         required: false
@@ -90,6 +90,35 @@ jobs:
           done
           echo "--- TLS on the custom domain"
           echo | timeout 20 openssl s_client -connect "$HOST:443" -servername "$HOST" 2>/dev/null | openssl x509 -noout -subject -enddate 2>&1 || echo "TLS handshake failed for $HOST"
+
+      # Numeric Azure Monitor metrics for the last 6 hours (15-minute buckets). Prints only metric
+      # names, timestamps and numbers: never resource IDs, app settings, environment or app logs.
+      - name: Metrics (last 6 h)
+        if: inputs.action == 'metrics'
+        run: |
+          RG=$(az resource list --name "$APP" --resource-type Microsoft.Web/sites --query "[0].resourceGroup" -o tsv)
+          [ -n "$RG" ] || { echo "App Service $APP not found or not visible to this identity"; exit 1; }
+          SITE_ID=$(az webapp show -n "$APP" -g "$RG" --query id -o tsv)
+          PLAN_ID=$(az webapp show -n "$APP" -g "$RG" --query appServicePlanId -o tsv)
+          table() {
+            jq -r '.value[] | .name.value as $n | .timeseries[]?.data[]?
+              | [$n, (.timeStamp[11:16]),
+                 ((.total // .average // .maximum // 0) * 100 | round / 100),
+                 ((.maximum // 0) * 100 | round / 100)] | @tsv'
+          }
+          {
+            echo "### $APP metrics, last 6 h, 15-min buckets (UTC)"
+            echo '```'
+            printf "metric\ttime\tvalue\tmax\n"
+            az monitor metrics list --resource "$SITE_ID" --offset 6h --interval PT15M \
+              --metrics Requests Http5xx Http4xx --aggregation Total Maximum -o json 2>/dev/null | table || echo "requests metrics unavailable"
+            az monitor metrics list --resource "$SITE_ID" --offset 6h --interval PT15M \
+              --metrics HttpResponseTime CpuTime MemoryWorkingSet HealthCheckStatus --aggregation Average Maximum -o json 2>/dev/null | table || echo "metrics unavailable"
+            echo "--- plan"
+            az monitor metrics list --resource "$PLAN_ID" --offset 6h --interval PT15M \
+              --metrics CpuPercentage MemoryPercentage --aggregation Average Maximum -o json 2>/dev/null | table || echo "metrics unavailable"
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Restart
         if: inputs.action == 'restart'
