@@ -1,12 +1,17 @@
 // Entry point (App Service startup: node out/apps/api/server.js).
 //
 // Order matters (issue #20): answer health and bind PORT first, then load the application.
-// Only express/http and ./health.js are imported statically, so no config, file logging on the
-// /home share, Prisma or Graph/Entra initialisation can run before the listener is up.
+// Only express/http, dotenv and ./health.js are imported statically, so no config, file logging on
+// the /home share, Prisma or Graph/Entra initialisation can run before the listener is up.
+import dotenv from 'dotenv';
 import express from 'express';
 import http from 'http';
 import { healthState, registerHealthRoutes } from './health.js';
 
+// PORT may come from .env (local/dotenv deployments). Read .env only when the platform did not set
+// PORT: App Service always sets it, so production never touches the file (on the /home share)
+// before listening. dotenv never overrides variables that are already set.
+if (process.env.PORT === undefined) dotenv.config();
 const port = Number(process.env.PORT ?? 4000);
 
 const root = express();

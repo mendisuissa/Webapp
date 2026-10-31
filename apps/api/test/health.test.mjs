@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
@@ -13,6 +13,8 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const apiDir = path.resolve(here, '..');
 const entry = path.join(apiDir, 'src', 'server.ts');
 const preload = path.join(here, 'stall-fs.mjs');
+// Resolved here so the child can run from any cwd (the dotenv test runs from a temp dir).
+const tsxLoader = import.meta.resolve('tsx');
 
 const freePort = () => new Promise((resolve, reject) => {
   const srv = net.createServer();
@@ -20,7 +22,7 @@ const freePort = () => new Promise((resolve, reject) => {
   srv.listen(0, '127.0.0.1', () => { const { port } = srv.address(); srv.close(() => resolve(port)); });
 });
 
-async function startServer(extraEnv) {
+async function startServer(extraEnv, { cwd = apiDir, setup } = {}) {
   const port = await freePort();
   const tmp = mkdtempSync(path.join(os.tmpdir(), 'efm-health-'));
   const env = {
@@ -33,8 +35,10 @@ async function startServer(extraEnv) {
     ...extraEnv(tmp)
   };
   for (const k of Object.keys(env)) if (env[k] === undefined) delete env[k];
-  const child = spawn(process.execPath, ['--import', 'tsx', '--import', preload, entry], {
-    cwd: apiDir, env, stdio: ['ignore', 'pipe', 'pipe']
+  const childCwd = typeof cwd === 'function' ? cwd(tmp) : cwd;
+  if (setup) setup({ tmp, port, cwd: childCwd });
+  const child = spawn(process.execPath, ['--import', tsxLoader, '--import', preload, entry], {
+    cwd: childCwd, env, stdio: ['ignore', 'pipe', 'pipe']
   });
   let output = '';
   child.stdout.on('data', (d) => { output += d; });
@@ -113,6 +117,21 @@ test('health stays up and reports the error when the application fails to load',
     assert.equal(health.body.ready, false);
     assert.match(health.body.initError, /SESSION_SECRET/);
     assert.equal((await get(srv.port, '/api/diag', 2000)).status, 503);
+  } finally {
+    srv.stop();
+  }
+});
+
+test('listens on the PORT from .env when the environment does not set PORT', { timeout: 30000 }, async () => {
+  // PORT exists only in <cwd>/.env; the listener must use it, not the 4000 default.
+  const srv = await startServer(() => ({ PORT: undefined }), {
+    cwd: (tmp) => tmp,
+    setup: ({ tmp, port }) => writeFileSync(path.join(tmp, '.env'), `PORT=${port}\n`)
+  });
+  try {
+    const health = await waitFor(srv.port, '/api/health', 15000, (r) => r.body?.ready === true);
+    assert.equal(health.status, 200, srv.output());
+    assert.match(srv.output(), new RegExp(`listening on port ${srv.port}\\b`));
   } finally {
     srv.stop();
   }
