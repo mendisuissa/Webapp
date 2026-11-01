@@ -8,11 +8,11 @@ on:
   workflow_dispatch:
     inputs:
       action:
-        description: list (all apps in the group), diagnose (read-only), metrics (read-only, numeric only) or restart
+        description: list (all apps in the group), plans (read-only cost inputs), diagnose (read-only), metrics (read-only, numeric only) or restart
         required: true
         default: diagnose
         type: choice
-        options: [list, diagnose, metrics, restart, entra-revoke-leaked]
+        options: [list, plans, diagnose, metrics, restart, entra-revoke-leaked]
       app:
         description: App Service name (default is this repo's app)
         required: false
@@ -68,6 +68,39 @@ jobs:
         if: inputs.action == 'list'
         run: |
           az webapp list --query "[].{name:name, state:state, rg:resourceGroup, hosts:join(', ', hostNames)}" -o table | tee -a "$GITHUB_STEP_SUMMARY"
+
+      # Read-only cost inputs for the CEO's cost map (KillWindowsApp-Mvp #32). Prints plan names, SKUs,
+      # worker counts and site counts, and month-to-date cost totals per service if this identity may
+      # read Cost Management. Never resource IDs, app settings, environment or app logs.
+      - name: Plans and month-to-date cost
+        if: inputs.action == 'plans'
+        run: |
+          {
+            echo "### App Service plans (whole subscription)"
+            echo '```'
+            az appservice plan list --query "[].{plan:name, location:location, sku:sku.name, tier:sku.tier, workers:sku.capacity, sites:numberOfSites, kind:kind}" -o table
+            echo '```'
+            echo "### Other billable resource types in the subscription (counts only)"
+            echo '```'
+            az resource list --query "[].type" -o tsv | sort | uniq -c | sort -rn
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          SUB=$(az account show --query id -o tsv)
+          BODY='{"type":"ActualCost","timeframe":"MonthToDate","dataset":{"granularity":"None","aggregation":{"cost":{"name":"Cost","function":"Sum"}},"grouping":[{"type":"Dimension","name":"ServiceName"}]}}'
+          PREV='{"type":"ActualCost","timeframe":"TheLastMonth","dataset":{"granularity":"None","aggregation":{"cost":{"name":"Cost","function":"Sum"}},"grouping":[{"type":"Dimension","name":"ServiceName"}]}}'
+          for pair in "month-to-date:$BODY" "last-month:$PREV"; do
+            label=${pair%%:*}; body=${pair#*:}
+            {
+              echo "### Actual cost, $label, by service"
+              echo '```'
+              if out=$(az rest --method post --url "https://management.azure.com/subscriptions/$SUB/providers/Microsoft.CostManagement/query?api-version=2023-03-01" --body "$body" -o json 2>/dev/null); then
+                echo "$out" | jq -r '.properties as $p | ($p.columns | map(.name)) as $c | $p.rows[] | [.[($c|index("ServiceName"))], (.[($c|index("Cost"))]*100|round/100), .[($c|index("Currency"))]] | @tsv'
+              else
+                echo "cost query unavailable to this identity"
+              fi
+              echo '```'
+            } | tee -a "$GITHUB_STEP_SUMMARY"
+          done
 
       - name: Diagnose
         if: inputs.action == 'diagnose' || inputs.action == 'restart'
