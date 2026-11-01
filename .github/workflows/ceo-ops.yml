@@ -124,9 +124,9 @@ jobs:
           echo "--- TLS on the custom domain"
           echo | timeout 20 openssl s_client -connect "$HOST:443" -servername "$HOST" 2>/dev/null | openssl x509 -noout -subject -enddate 2>&1 || echo "TLS handshake failed for $HOST"
 
-      # Numeric Azure Monitor metrics for the last 6 hours (15-minute buckets). Prints only metric
+      # Numeric Azure Monitor metrics: last 6 hours (15-minute buckets) and a 7-day avg/peak summary. Prints only metric
       # names, timestamps and numbers: never resource IDs, app settings, environment or app logs.
-      - name: Metrics (last 6 h)
+      - name: Metrics (last 6 h and 7-day summary)
         if: inputs.action == 'metrics'
         run: |
           RG=$(az resource list --name "$APP" --resource-type Microsoft.Web/sites --query "[0].resourceGroup" -o tsv)
@@ -143,13 +143,43 @@ jobs:
             echo "### $APP metrics, last 6 h, 15-min buckets (UTC)"
             echo '```'
             printf "metric\ttime\tvalue\tmax\n"
-            az monitor metrics list --resource "$SITE_ID" --offset 6h --interval PT15M \
-              --metrics Requests Http5xx Http4xx --aggregation Total Maximum -o json 2>/dev/null | table || echo "requests metrics unavailable"
-            az monitor metrics list --resource "$SITE_ID" --offset 6h --interval PT15M \
-              --metrics HttpResponseTime CpuTime MemoryWorkingSet HealthCheckStatus --aggregation Average Maximum -o json 2>/dev/null | table || echo "metrics unavailable"
-            echo "--- plan"
-            az monitor metrics list --resource "$PLAN_ID" --offset 6h --interval PT15M \
-              --metrics CpuPercentage MemoryPercentage --aggregation Average Maximum -o json 2>/dev/null | table || echo "metrics unavailable"
+            # One metric per call, so an unsupported name cannot blank the others. On failure print
+            # only the Azure error code (never the message, which can carry resource IDs).
+            metric() { # resource, offset, interval, name, aggregations...
+              res=$1 off=$2 iv=$3 name=$4; shift 4
+              if out=$(az monitor metrics list --resource "$res" --offset "$off" --interval "$iv" \
+                    --metrics "$name" --aggregation "$@" -o json 2>/tmp/metric.err); then
+                echo "$out" | table
+              else
+                code=$(grep -oE '\(([A-Za-z]+)\)|Code: [A-Za-z]+' /tmp/metric.err | head -1 | tr -d '()' | sed 's/Code: //')
+                printf "%s\tunavailable\t%s\n" "$name" "${code:-error}"
+              fi
+            }
+            # Window summary: average and peak over every bucket.
+            summary() { # resource, name, aggregation
+              if out=$(az monitor metrics list --resource "$1" --offset 7d --interval PT1H \
+                    --metrics "$2" --aggregation Average Maximum -o json 2>/tmp/metric.err); then
+                echo "$out" | jq -r --arg n "$2" '[.value[].timeseries[]?.data[]?] as $d
+                  | [$n, "7d", (([$d[].average | numbers] | if length > 0 then add / length else null end) // "no-data" | if type == "number" then (. * 100 | round / 100) else . end),
+                     (([$d[].maximum | numbers] | max) // "no-data" | if type == "number" then (. * 100 | round / 100) else . end)] | @tsv'
+              else
+                code=$(grep -oE '\(([A-Za-z]+)\)|Code: [A-Za-z]+' /tmp/metric.err | head -1 | tr -d '()' | sed 's/Code: //')
+                printf "%s\t7d\tunavailable\t%s\n" "$2" "${code:-error}"
+              fi
+            }
+            for m in Requests Http5xx Http4xx; do metric "$SITE_ID" 6h PT15M "$m" Total Maximum; done
+            for m in HttpResponseTime CpuTime MemoryWorkingSet AverageMemoryWorkingSet HealthCheckStatus; do
+              metric "$SITE_ID" 6h PT15M "$m" Average Maximum
+            done
+            echo "--- 7-day summary (metric, window, average, peak); MemoryWorkingSet in bytes"
+            printf "metric\twindow\tavg\tpeak\n"
+            summary "$SITE_ID" MemoryWorkingSet
+            summary "$SITE_ID" CpuTime
+            echo "--- plan (shared by every app on it): 7-day summary, percent"
+            summary "$PLAN_ID" CpuPercentage
+            summary "$PLAN_ID" MemoryPercentage
+            echo "--- plan, last 6 h"
+            for m in CpuPercentage MemoryPercentage; do metric "$PLAN_ID" 6h PT15M "$m" Average Maximum; done
             echo '```'
           } | tee -a "$GITHUB_STEP_SUMMARY"
 
