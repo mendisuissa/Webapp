@@ -78,7 +78,7 @@ jobs:
           {
             echo "### App Service plans (whole subscription)"
             echo '```'
-            az appservice plan list --query "[].{plan:name, rg:resourceGroup, location:location, sku:sku.name, tier:sku.tier, workers:sku.capacity, sites:numberOfSites, kind:kind}" -o table
+            az appservice plan list --query "[].{plan:name, location:location, sku:sku.name, tier:sku.tier, workers:sku.capacity, sites:numberOfSites, kind:kind}" -o table
             echo '```'
             echo "### Other billable resource types in the subscription (counts only)"
             echo '```'
