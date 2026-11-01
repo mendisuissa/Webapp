@@ -80,6 +80,18 @@ jobs:
             echo '```'
             az appservice plan list --query "[].{plan:name, location:location, sku:sku.name, tier:sku.tier, workers:sku.capacity, sites:numberOfSites, kind:kind}" -o table
             echo '```'
+            echo "### App to plan mapping"
+            echo '```'
+            az webapp list -o json | jq -r '.[] | [.name, (.appServicePlanId | split("/") | last), .state] | @tsv'
+            echo '```'
+            echo "### Subscription offer (how it is billed)"
+            echo '```'
+            # quotaId names the offer (e.g. PayAsYouGo_2014-09-01, MSDN_2014-09-01 = Visual Studio credit);
+            # spendingLimit On means a credit-funded subscription that stops instead of billing a card.
+            az rest --method get --url "https://management.azure.com/subscriptions/$(az account show --query id -o tsv)?api-version=2020-01-01" -o json 2>/dev/null \
+              | jq -r '"quotaId\t\(.subscriptionPolicies.quotaId // "unknown")", "spendingLimit\t\(.subscriptionPolicies.spendingLimit // "unknown")", "state\t\(.state // "unknown")"' \
+              || echo "subscription policies unavailable to this identity"
+            echo '```'
             echo "### Other billable resource types in the subscription (counts only)"
             echo '```'
             az resource list --query "[].type" -o tsv | sort | uniq -c | sort -rn
