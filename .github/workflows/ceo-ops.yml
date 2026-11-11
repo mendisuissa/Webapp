@@ -148,7 +148,8 @@ jobs:
               rows=$(printf '%s' "$out" | table)
               [ -n "$rows" ] && printf '%s\n' "$rows" || echo "$metric: no data points"
             else
-              msg=$(head -c 300 /tmp/metric.err | tr '\n' ' ' \
+              # Redact the whole message first, then shorten it, so no identifier fragment survives a cut.
+              msg=$(tr '\n' ' ' < /tmp/metric.err \
                 | sed -E 's#/subscriptions/[^ ]*#<resource>#g; s/[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}/<id>/g' | cut -c1-200)
               echo "$metric: unavailable: $msg"
             fi
