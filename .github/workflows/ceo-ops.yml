@@ -4,6 +4,9 @@ name: CEO ops (Azure diagnose / restart)
 # same OIDC login the deploy workflow uses. There are no stored keys. This repository's logs are
 # public, so print only service state, bindings, certificate dates and HTTP codes; never app logs or
 # settings.
+#
+# Dispatch it from `main` only. A dispatch from another branch ends in startup_failure before any
+# job starts (run 43095238148), so a change here is verified after it reaches main.
 on:
   workflow_dispatch:
     inputs:
