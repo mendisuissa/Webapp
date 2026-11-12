@@ -4,6 +4,9 @@ name: CEO ops (Azure diagnose / restart)
 # same OIDC login the deploy workflow uses. There are no stored keys. This repository's logs are
 # public, so print only service state, bindings, certificate dates and HTTP codes; never app logs or
 # settings.
+#
+# Dispatch it from `main` only. A dispatch from another branch ends in startup_failure before any
+# job starts (run 43095238148), so a change here is verified after it reaches main.
 on:
   workflow_dispatch:
     inputs:
@@ -139,17 +142,29 @@ jobs:
                  ((.total // .average // .maximum // 0) * 100 | round / 100),
                  ((.maximum // 0) * 100 | round / 100)] | @tsv'
           }
+          # One metric per call: a single unsupported name makes az fail the whole list. On failure,
+          # print only the error code and a short message with GUIDs and resource paths redacted.
+          one() {
+            local res="$1" metric="$2" agg="$3" out
+            if out=$(az monitor metrics list --resource "$res" --offset 6h --interval PT15M \
+                  --metrics "$metric" --aggregation $agg -o json 2>/tmp/metric.err); then
+              rows=$(printf '%s' "$out" | table)
+              [ -n "$rows" ] && printf '%s\n' "$rows" || echo "$metric: no data points"
+            else
+              # Redact the whole message first, then shorten it, so no identifier fragment survives a cut.
+              msg=$(tr '\n' ' ' < /tmp/metric.err \
+                | sed -E 's#/subscriptions/[^ ]*#<resource>#g; s/[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}/<id>/g' | cut -c1-200)
+              echo "$metric: unavailable: $msg"
+            fi
+          }
           {
             echo "### $APP metrics, last 6 h, 15-min buckets (UTC)"
             echo '```'
             printf "metric\ttime\tvalue\tmax\n"
-            az monitor metrics list --resource "$SITE_ID" --offset 6h --interval PT15M \
-              --metrics Requests Http5xx Http4xx --aggregation Total Maximum -o json 2>/dev/null | table || echo "requests metrics unavailable"
-            az monitor metrics list --resource "$SITE_ID" --offset 6h --interval PT15M \
-              --metrics HttpResponseTime CpuTime MemoryWorkingSet HealthCheckStatus --aggregation Average Maximum -o json 2>/dev/null | table || echo "metrics unavailable"
+            for m in Requests Http5xx Http4xx; do one "$SITE_ID" "$m" "Total Maximum"; done
+            for m in HttpResponseTime CpuTime MemoryWorkingSet HealthCheckStatus; do one "$SITE_ID" "$m" "Average Maximum"; done
             echo "--- plan"
-            az monitor metrics list --resource "$PLAN_ID" --offset 6h --interval PT15M \
-              --metrics CpuPercentage MemoryPercentage --aggregation Average Maximum -o json 2>/dev/null | table || echo "metrics unavailable"
+            for m in CpuPercentage MemoryPercentage; do one "$PLAN_ID" "$m" "Average Maximum"; done
             echo '```'
           } | tee -a "$GITHUB_STEP_SUMMARY"
 
