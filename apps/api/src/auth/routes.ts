@@ -1,6 +1,7 @@
 import { Router, type Request } from 'express';
 import { config } from '../config.js';
 import { getMsalApp } from './msal.js';
+import { recordUsage } from '../usageCounter.js';
 
 export const authRouter = Router();
 
@@ -96,6 +97,8 @@ authRouter.get('/callback', async (req, res) => {
       tenantId: tokenResponse?.tenantId,
       name: tokenResponse?.account?.name
     };
+    // #172: count the sign-in (tenant + a hash of the user, no names) so usage can be measured.
+    recordUsage('sign-in', tokenResponse?.tenantId, tokenResponse?.uniqueId || tokenResponse?.account?.localAccountId);
 
     const grantedScopes = tokenResponse?.accessToken ? decodeTokenScopes(tokenResponse.accessToken) : [];
     req.session.hasWritePermissions = grantedScopes.includes('DeviceManagementApps.ReadWrite.All') || grantedScopes.includes('Group.Read.All') || grantedScopes.includes('Directory.Read.All') || grantedScopes.includes('DeviceManagementConfiguration.ReadWrite.All');
